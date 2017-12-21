@@ -1,0 +1,6 @@
+[package]
+name = "radish"
+version = "0.1.0"
+authors = ["Souvik Banerjee <souvik1997@gmail.com>"]
+
+[dependencies]
