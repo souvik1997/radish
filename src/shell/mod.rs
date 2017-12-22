@@ -29,19 +29,30 @@ impl Shell {
                 Ok(command) => {
                     println!("Got command {}", command);
                     if let nom::IResult::Done(_, tokens) = syntax::lexer::lex(&command) {
-                        println!("{:?}", syntax::parser::parse(&tokens));
-                    }
-                    // TODO: use tokenized output to construct argv
-                    let split: Vec<&str> = command.split_whitespace().collect();
-                    if let Some(binary) = split.first() {
-                        if let Some(job) = jobs::Job::new(&binary, &split) {
-                            job.wait();
+                        if let Some(expr) = syntax::parser::parse(&tokens) {
+                            self.evaluate(&expr);
                         }
                     }
                 }
                 Err(_) => {
                     println!("Error when reading input!");
                 }
+            }
+        }
+    }
+
+    fn evaluate(&mut self, expr: &syntax::ast::Expr) {
+        match expr {
+            &syntax::ast::Expr::Command(ref binary, ref arguments, ref other_arguments) => {
+                if other_arguments.len() > 0 {
+                    println!("Other arguments (not implemented): {:?}", other_arguments);
+                }
+                if let Some(job) = jobs::Job::new(&binary, &arguments) {
+                    job.wait();
+                }
+            }
+            &syntax::ast::Expr::Pipeline(_, _) => {
+                println!("pipelines not implemented!");
             }
         }
     }
