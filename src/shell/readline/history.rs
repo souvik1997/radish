@@ -224,106 +224,19 @@ impl<'a> DoubleEndedIterator for Iter<'a> {
     }
 }
 
-#[cfg(windows)]
-fn umask() -> u16 {
-    0
-}
-#[cfg(unix)]
 fn umask() -> libc::mode_t {
     unsafe { libc::umask(libc::S_IXUSR | libc::S_IRWXG | libc::S_IRWXO) }
 }
-#[cfg(windows)]
-fn restore_umask(_: u16) {}
-#[cfg(unix)]
+
 fn restore_umask(old_umask: libc::mode_t) {
     unsafe {
         libc::umask(old_umask);
     }
 }
 
-#[cfg(windows)]
-fn fix_perm(_: &File) {}
-#[cfg(unix)]
 fn fix_perm(file: &File) {
     use std::os::unix::io::AsRawFd;
     unsafe {
         libc::fchmod(file.as_raw_fd(), libc::S_IRUSR | libc::S_IWUSR);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    extern crate tempdir;
-    use std::path::Path;
-    use super::{Direction, History};
-    use config::Config;
-
-    fn init() -> History {
-        let mut history = History::new();
-        assert!(history.add("line1"));
-        assert!(history.add("line2"));
-        assert!(history.add("line3"));
-        history
-    }
-
-    #[test]
-    fn new() {
-        let history = History::new();
-        assert_eq!(0, history.entries.len());
-    }
-
-    #[test]
-    fn add() {
-        let config = Config::builder().history_ignore_space(true).build();
-        let mut history = History::with_config(config);
-        assert_eq!(config.max_history_size(), history.max_len);
-        assert!(history.add("line1"));
-        assert!(history.add("line2"));
-        assert!(!history.add("line2"));
-        assert!(!history.add(""));
-        assert!(!history.add(" line3"));
-    }
-
-    #[test]
-    fn set_max_len() {
-        let mut history = init();
-        history.set_max_len(1);
-        assert_eq!(1, history.entries.len());
-        assert_eq!(Some(&"line3".to_string()), history.last());
-    }
-
-    #[test]
-    fn save() {
-        let mut history = init();
-        let td = tempdir::TempDir::new_in(&Path::new("."), "histo").unwrap();
-        let history_path = td.path().join(".history");
-
-        history.save(&history_path).unwrap();
-        history.load(&history_path).unwrap();
-        td.close().unwrap();
-    }
-
-    #[test]
-    fn search() {
-        let history = init();
-        assert_eq!(None, history.search("", 0, Direction::Forward));
-        assert_eq!(None, history.search("none", 0, Direction::Forward));
-        assert_eq!(None, history.search("line", 3, Direction::Forward));
-
-        assert_eq!(Some(0), history.search("line", 0, Direction::Forward));
-        assert_eq!(Some(1), history.search("line", 1, Direction::Forward));
-        assert_eq!(Some(2), history.search("line3", 1, Direction::Forward));
-    }
-
-    #[test]
-    fn reverse_search() {
-        let history = init();
-        assert_eq!(None, history.search("", 2, Direction::Reverse));
-        assert_eq!(None, history.search("none", 2, Direction::Reverse));
-        assert_eq!(None, history.search("line", 3, Direction::Reverse));
-
-        assert_eq!(Some(2), history.search("line", 2, Direction::Reverse));
-        assert_eq!(Some(1), history.search("line", 1, Direction::Reverse));
-        assert_eq!(Some(0), history.search("line1", 1, Direction::Reverse));
     }
 }

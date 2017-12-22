@@ -19,12 +19,7 @@
 extern crate encode_unicode;
 extern crate unicode_segmentation;
 extern crate unicode_width;
-#[cfg(unix)]
 extern crate nix;
-#[cfg(windows)]
-extern crate winapi;
-#[cfg(windows)]
-extern crate kernel32;
 
 pub mod delegate;
 mod consts;
@@ -192,44 +187,6 @@ impl<'out, 'prompt> State<'out, 'prompt> {
         self.old_rows = end_pos.row;
 
         write_and_flush(self.out, ab.as_bytes())
-    }
-
-    #[cfg(windows)]
-    fn refresh(&mut self, prompt: &str, prompt_size: Position) -> Result<()> {
-        // calculate the position of the end of the input line
-        let end_pos = calculate_position(&self.line, prompt_size, self.cols);
-        // calculate the desired position of the cursor
-        let cursor = calculate_position(&self.line[..self.line.pos()], prompt_size, self.cols);
-
-        // position at the start of the prompt, clear to end of previous input
-        let mut info = try!(self.term.get_console_screen_buffer_info());
-        info.dwCursorPosition.X = 0;
-        info.dwCursorPosition.Y -= self.cursor.row as i16;
-        try!(self.term
-                 .set_console_cursor_position(info.dwCursorPosition));
-        let mut _count = 0;
-        try!(self.term
-                 .fill_console_output_character((info.dwSize.X * (self.old_rows as i16 + 1)) as
-                                                u32,
-                                                info.dwCursorPosition));
-        let mut ab = String::new();
-        // display the prompt
-        ab.push_str(prompt); // TODO handle ansi escape code (SetConsoleTextAttribute)
-        // display the input line
-        ab.push_str(&self.line);
-        try!(write_and_flush(self.out, ab.as_bytes()));
-
-        // position the cursor
-        let mut info = try!(self.term.get_console_screen_buffer_info());
-        info.dwCursorPosition.X = cursor.col as i16;
-        info.dwCursorPosition.Y -= (end_pos.row - cursor.row) as i16;
-        try!(self.term
-                 .set_console_cursor_position(info.dwCursorPosition));
-
-        self.cursor = cursor;
-        self.old_rows = end_pos.row;
-
-        Ok(())
     }
 
     fn update_columns(&mut self) {
@@ -868,7 +825,7 @@ fn reverse_incremental_search<R: RawReader>(rdr: &mut R,
 #[allow(let_unit_value)]
 fn readline_edit<C: Delegate>(prompt: &str,
                                editor: &mut Editor<C>,
-                               original_mode: tty::Mode)
+                               original_mode: self::tty::Mode)
                                -> Result<String> {
     let delegate = &editor.delegate;
 
@@ -1089,7 +1046,7 @@ fn readline_edit<C: Delegate>(prompt: &str,
             #[cfg(unix)]
             Cmd::Suspend => {
                 try!(original_mode.disable_raw_mode());
-                try!(tty::suspend());
+                try!(self::tty::suspend());
                 try!(s.term.enable_raw_mode()); // TODO original_mode may have changed
                 try!(s.refresh_line());
                 continue;
@@ -1103,7 +1060,7 @@ fn readline_edit<C: Delegate>(prompt: &str,
     Ok(s.line.into_string())
 }
 
-struct Guard(tty::Mode);
+struct Guard(self::tty::Mode);
 
 #[allow(unused_must_use)]
 impl Drop for Guard {
@@ -1264,181 +1221,5 @@ impl<'a, C: Delegate> Iterator for Iter<'a, C> {
             Err(error::ReadlineError::Eof) => None,
             e @ Err(_) => Some(e),
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::cell::RefCell;
-    use std::collections::HashMap;
-    use std::io::Write;
-    use std::rc::Rc;
-    use line_buffer::LineBuffer;
-    use history::History;
-    use completion::Delegate;
-    use config::Config;
-    use consts::KeyPress;
-    use keymap::{Cmd, EditState};
-    use super::{Editor, Position, Result, State};
-    use tty::{Terminal, Term};
-
-    fn init_state<'out>(out: &'out mut Write,
-                        line: &str,
-                        pos: usize,
-                        cols: usize)
-                        -> State<'out, 'static> {
-        let term = Terminal::new();
-        let config = Config::default();
-        State {
-            out: out,
-            prompt: "",
-            prompt_size: Position::default(),
-            line: LineBuffer::init(line, pos),
-            cursor: Position::default(),
-            cols: cols,
-            old_rows: 0,
-            history_index: 0,
-            snapshot: LineBuffer::with_capacity(100),
-            term: term,
-            edit_state: EditState::new(&config, Rc::new(RefCell::new(HashMap::new()))),
-        }
-    }
-
-    fn init_editor(keys: &[KeyPress]) -> Editor<()> {
-        let mut editor = Editor::<()>::new();
-        editor.term.keys.extend(keys.iter().cloned());
-        editor
-    }
-
-    #[test]
-    fn edit_history_next() {
-        let mut out = ::std::io::sink();
-        let line = "current edited line";
-        let mut s = init_state(&mut out, line, 6, 80);
-        let mut history = History::new();
-        history.add("line0");
-        history.add("line1");
-        s.history_index = history.len();
-
-        for _ in 0..2 {
-            super::edit_history_next(&mut s, &history, false).unwrap();
-            assert_eq!(line, s.line.as_str());
-        }
-
-        super::edit_history_next(&mut s, &history, true).unwrap();
-        assert_eq!(line, s.snapshot.as_str());
-        assert_eq!(1, s.history_index);
-        assert_eq!("line1", s.line.as_str());
-
-        for _ in 0..2 {
-            super::edit_history_next(&mut s, &history, true).unwrap();
-            assert_eq!(line, s.snapshot.as_str());
-            assert_eq!(0, s.history_index);
-            assert_eq!("line0", s.line.as_str());
-        }
-
-        super::edit_history_next(&mut s, &history, false).unwrap();
-        assert_eq!(line, s.snapshot.as_str());
-        assert_eq!(1, s.history_index);
-        assert_eq!("line1", s.line.as_str());
-
-        super::edit_history_next(&mut s, &history, false).unwrap();
-        // assert_eq!(line, s.snapshot);
-        assert_eq!(2, s.history_index);
-        assert_eq!(line, s.line.as_str());
-    }
-
-    struct SimpleDelegate;
-    impl Delegate for SimpleDelegate {
-        fn complete(&self, line: &str, _pos: usize) -> Result<(usize, Vec<String>)> {
-            Ok((0, vec![line.to_string() + "t"]))
-        }
-    }
-
-    #[test]
-    fn complete_line() {
-        let mut out = ::std::io::sink();
-        let mut s = init_state(&mut out, "rus", 3, 80);
-        let keys = &[KeyPress::Enter];
-        let mut rdr = keys.iter();
-        let delegate = SimpleDelegate;
-        let cmd = super::complete_line(&mut rdr, &mut s, &delegate, &Config::default()).unwrap();
-        assert_eq!(Some(Cmd::AcceptLine), cmd);
-        assert_eq!("rust", s.line.as_str());
-        assert_eq!(4, s.line.pos());
-    }
-
-    #[test]
-    fn prompt_with_ansi_escape_codes() {
-        let pos = super::calculate_position("\x1b[1;32m>>\x1b[0m ", Position::default(), 80);
-        assert_eq!(3, pos.col);
-        assert_eq!(0, pos.row);
-    }
-
-    fn assert_line(keys: &[KeyPress], expected_line: &str) {
-        let mut editor = init_editor(keys);
-        let actual_line = editor.readline(&">>").unwrap();
-        assert_eq!(expected_line, actual_line);
-    }
-
-    #[test]
-    fn delete_key() {
-        assert_line(&[KeyPress::Char('a'), KeyPress::Delete, KeyPress::Enter],
-                    "a");
-        assert_line(&[KeyPress::Char('a'),
-                      KeyPress::Left,
-                      KeyPress::Delete,
-                      KeyPress::Enter],
-                    "");
-    }
-
-    #[test]
-    fn down_key() {
-        assert_line(&[KeyPress::Down, KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn end_key() {
-        assert_line(&[KeyPress::End, KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn home_key() {
-        assert_line(&[KeyPress::Home, KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn left_key() {
-        assert_line(&[KeyPress::Left, KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn meta_backspace_key() {
-        assert_line(&[KeyPress::Meta('\x08'), KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn page_down_key() {
-        assert_line(&[KeyPress::PageDown, KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn page_up_key() {
-        assert_line(&[KeyPress::PageUp, KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn right_key() {
-        assert_line(&[KeyPress::Right, KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn up_key() {
-        assert_line(&[KeyPress::Up, KeyPress::Enter], "");
-    }
-
-    #[test]
-    fn unknown_esc_key() {
-        assert_line(&[KeyPress::UnknownEscSeq, KeyPress::Enter], "");
     }
 }

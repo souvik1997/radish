@@ -15,7 +15,6 @@ pub trait RawReader: Sized {
     /// Blocking read of key pressed.
     fn next_key(&mut self) -> Result<KeyPress>;
     /// For CTRL-V support
-    #[cfg(unix)]
     fn next_char(&mut self) -> Result<char>;
 }
 
@@ -46,21 +45,5 @@ pub trait Term: Clone {
     fn clear_screen(&mut self, w: &mut Write) -> Result<()>;
 }
 
-// If on Windows platform import Windows TTY module
-// and re-export into mod.rs scope
-#[cfg(all(windows, not(test)))]
-mod windows;
-#[cfg(all(windows, not(test)))]
-pub use self::windows::*;
-
-// If on Unix platform import Unix TTY module
-// and re-export into mod.rs scope
-#[cfg(all(unix, not(test)))]
 mod unix;
-#[cfg(all(unix, not(test)))]
 pub use self::unix::*;
-
-#[cfg(test)]
-mod test;
-#[cfg(test)]
-pub use self::test::*;
