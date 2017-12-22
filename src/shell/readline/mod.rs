@@ -26,7 +26,7 @@ extern crate winapi;
 #[cfg(windows)]
 extern crate kernel32;
 
-pub mod completion;
+pub mod delegate;
 mod consts;
 pub mod error;
 pub mod history;
@@ -53,7 +53,7 @@ use self::unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use self::tty::{RawMode, RawReader, Terminal, Term};
 
 use self::encode_unicode::CharExt;
-use self::completion::{Completer, longest_common_prefix};
+use self::delegate::{Delegate, longest_common_prefix};
 use self::history::{Direction, History};
 use self::line_buffer::{LineBuffer, MAX_LINE, WordAction};
 pub use self::keymap::{Anchor, At, CharSearch, Cmd, Movement, RepeatCount, Word};
@@ -614,11 +614,11 @@ fn edit_history(s: &mut State, history: &History, first: bool) -> Result<()> {
 /// Completes the line/word
 fn complete_line<R: RawReader>(rdr: &mut R,
                                s: &mut State,
-                               completer: &Completer,
+                               delegate: &Delegate,
                                config: &Config)
                                -> Result<Option<Cmd>> {
     // get a list of completions
-    let (start, candidates) = try!(completer.complete(&s.line, s.line.pos()));
+    let (start, candidates) = try!(delegate.complete(&s.line, s.line.pos()));
     // if no completions, we are done
     if candidates.is_empty() {
         try!(beep());
@@ -631,7 +631,7 @@ fn complete_line<R: RawReader>(rdr: &mut R,
         loop {
             // Show completion or original buffer
             if i < candidates.len() {
-                completer.update(&mut s.line, start, &candidates[i]);
+                delegate.update(&mut s.line, start, &candidates[i]);
                 try!(s.refresh_line());
             } else {
                 // Restore current edited line
@@ -673,7 +673,7 @@ fn complete_line<R: RawReader>(rdr: &mut R,
         if let Some(lcp) = longest_common_prefix(&candidates) {
             // if we can extend the item, extend it and return to main loop
             if lcp.len() > s.line.pos() - start {
-                completer.update(&mut s.line, start, lcp);
+                delegate.update(&mut s.line, start, lcp);
                 try!(s.refresh_line());
                 return Ok(None);
             }
@@ -866,11 +866,11 @@ fn reverse_incremental_search<R: RawReader>(rdr: &mut R,
 /// It will also handle special inputs in an appropriate fashion
 /// (e.g., C-c will exit readline)
 #[allow(let_unit_value)]
-fn readline_edit<C: Completer>(prompt: &str,
+fn readline_edit<C: Delegate>(prompt: &str,
                                editor: &mut Editor<C>,
                                original_mode: tty::Mode)
                                -> Result<String> {
-    let completer = editor.completer.as_ref().map(|c| c as &Completer);
+    let delegate = editor.delegate.as_ref().map(|c| c as &Delegate);
 
     let mut stdout = editor.term.create_writer();
 
@@ -894,8 +894,8 @@ fn readline_edit<C: Completer>(prompt: &str,
         }
 
         // autocomplete
-        if cmd == Cmd::Complete && completer.is_some() {
-            let next = try!(complete_line(&mut rdr, &mut s, completer.unwrap(), &editor.config));
+        if cmd == Cmd::Complete && delegate.is_some() {
+            let next = try!(complete_line(&mut rdr, &mut s, delegate.unwrap(), &editor.config));
             if next.is_some() {
                 cmd = next.unwrap();
             } else {
@@ -1115,7 +1115,7 @@ impl Drop for Guard {
 
 /// Readline method that will enable RAW mode, call the `readline_edit()`
 /// method and disable raw mode
-fn readline_raw<C: Completer>(prompt: &str, editor: &mut Editor<C>) -> Result<String> {
+fn readline_raw<C: Delegate>(prompt: &str, editor: &mut Editor<C>) -> Result<String> {
     let original_mode = try!(editor.term.enable_raw_mode());
     let guard = Guard(original_mode);
     let user_input = readline_edit(prompt, editor, original_mode);
@@ -1134,16 +1134,16 @@ fn readline_direct() -> Result<String> {
 }
 
 /// Line editor
-pub struct Editor<C: Completer> {
+pub struct Editor<C: Delegate> {
     term: Terminal,
     history: History,
-    completer: Option<C>,
+    delegate: Option<C>,
     kill_ring: KillRing,
     config: Config,
     custom_bindings: Rc<RefCell<HashMap<KeyPress, Cmd>>>,
 }
 
-impl<C: Completer> Editor<C> {
+impl<C: Delegate> Editor<C> {
     pub fn new() -> Editor<C> {
         Self::with_config(Config::default())
     }
@@ -1153,7 +1153,7 @@ impl<C: Completer> Editor<C> {
         Editor {
             term: term,
             history: History::with_config(config),
-            completer: None,
+            delegate: None,
             kill_ring: KillRing::new(60),
             config: config,
             custom_bindings: Rc::new(RefCell::new(HashMap::new())),
@@ -1204,8 +1204,8 @@ impl<C: Completer> Editor<C> {
     }
 
     /// Register a callback function to be called for tab-completion.
-    pub fn set_completer(&mut self, completer: Option<C>) {
-        self.completer = completer;
+    pub fn set_delegate(&mut self, delegate: Option<C>) {
+        self.delegate = delegate;
     }
 
     /// Bind a sequence to a command.
@@ -1239,7 +1239,7 @@ impl<C: Completer> Editor<C> {
     }
 }
 
-impl<C: Completer> fmt::Debug for Editor<C> {
+impl<C: Delegate> fmt::Debug for Editor<C> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Editor")
             .field("term", &self.term)
@@ -1248,14 +1248,14 @@ impl<C: Completer> fmt::Debug for Editor<C> {
     }
 }
 
-pub struct Iter<'a, C: Completer>
+pub struct Iter<'a, C: Delegate>
     where C: 'a
 {
     editor: &'a mut Editor<C>,
     prompt: &'a str,
 }
 
-impl<'a, C: Completer> Iterator for Iter<'a, C> {
+impl<'a, C: Delegate> Iterator for Iter<'a, C> {
     type Item = Result<String>;
 
     fn next(&mut self) -> Option<Result<String>> {
@@ -1279,7 +1279,7 @@ mod test {
     use std::rc::Rc;
     use line_buffer::LineBuffer;
     use history::History;
-    use completion::Completer;
+    use completion::Delegate;
     use config::Config;
     use consts::KeyPress;
     use keymap::{Cmd, EditState};
@@ -1352,8 +1352,8 @@ mod test {
         assert_eq!(line, s.line.as_str());
     }
 
-    struct SimpleCompleter;
-    impl Completer for SimpleCompleter {
+    struct SimpleDelegate;
+    impl Delegate for SimpleDelegate {
         fn complete(&self, line: &str, _pos: usize) -> Result<(usize, Vec<String>)> {
             Ok((0, vec![line.to_string() + "t"]))
         }
@@ -1365,8 +1365,8 @@ mod test {
         let mut s = init_state(&mut out, "rus", 3, 80);
         let keys = &[KeyPress::Enter];
         let mut rdr = keys.iter();
-        let completer = SimpleCompleter;
-        let cmd = super::complete_line(&mut rdr, &mut s, &completer, &Config::default()).unwrap();
+        let delegate = SimpleDelegate;
+        let cmd = super::complete_line(&mut rdr, &mut s, &delegate, &Config::default()).unwrap();
         assert_eq!(Some(Cmd::AcceptLine), cmd);
         assert_eq!("rust", s.line.as_str());
         assert_eq!(4, s.line.pos());

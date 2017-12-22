@@ -15,7 +15,7 @@ impl Shell {
     pub fn new() -> Self {
         let state = Arc::new(ShellState::new());
         let mut readline = readline::Editor::<Arc<ShellState>>::new();
-        readline.set_completer(Some(Arc::clone(&state)));
+        readline.set_delegate(Some(Arc::clone(&state)));
         Shell {
             readline: readline,
             state: state

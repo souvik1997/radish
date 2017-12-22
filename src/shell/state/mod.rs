@@ -14,8 +14,12 @@ impl ShellState {
     }
 }
 
-impl readline::completion::Completer for ShellState {
+impl readline::delegate::Delegate for ShellState {
     fn complete(&self, _line: &str, _pos: usize) -> readline::Result<(usize, Vec<String>)> {
         Ok((0, Vec::new()))
+    }
+
+    fn prompt(&self) -> String {
+        String::from("$ ")
     }
 }

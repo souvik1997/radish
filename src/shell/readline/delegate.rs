@@ -7,12 +7,8 @@ use std::path::{self, Path};
 use super::Result;
 use super::line_buffer::LineBuffer;
 
-// TODO: let the implementers choose/find word boudaries ???
-// (line, pos) is like (rl_line_buffer, rl_point) to make contextual completion ("select t.na| from tbl as t")
-// TOOD: make &self &mut self ???
-
-/// To be called for tab-completion.
-pub trait Completer {
+pub trait Delegate {
+    /// To be called for tab-completion.
     /// Takes the currently edited `line` with the cursor `pos`ition and
     /// returns the start position and the completion candidates for the partial word to be completed.
     /// "ls /usr/loc" => Ok((3, vec!["/usr/local/"]))
@@ -22,34 +18,45 @@ pub trait Completer {
         let end = line.pos();
         line.replace(start..end, elected)
     }
+
+    fn prompt(&self) -> String;
 }
 
-impl Completer for () {
+impl Delegate for () {
     fn complete(&self, _line: &str, _pos: usize) -> Result<(usize, Vec<String>)> {
         Ok((0, Vec::new()))
     }
     fn update(&self, _line: &mut LineBuffer, _start: usize, _elected: &str) {
         unreachable!()
     }
+    fn prompt(&self) -> String {
+        String::from("$ ")
+    }
 }
 
-impl<'c, C: ?Sized + Completer> Completer for &'c C {
+impl<'c, C: ?Sized + Delegate> Delegate for &'c C {
     fn complete(&self, line: &str, pos: usize) -> Result<(usize, Vec<String>)> {
         (**self).complete(line, pos)
     }
     fn update(&self, line: &mut LineBuffer, start: usize, elected: &str) {
         (**self).update(line, start, elected)
     }
+    fn prompt(&self) -> String {
+        (**self).prompt()
+    }
 }
 macro_rules! box_completer {
     ($($id: ident)*) => {
         $(
-            impl<C: ?Sized + Completer> Completer for $id<C> {
+            impl<C: ?Sized + Delegate> Delegate for $id<C> {
                 fn complete(&self, line: &str, pos: usize) -> Result<(usize, Vec<String>)> {
                     (**self).complete(line, pos)
                 }
                 fn update(&self, line: &mut LineBuffer, start: usize, elected: &str) {
                     (**self).update(line, start, elected)
+                }
+                fn prompt(&self) -> String {
+                    (**self).prompt()
                 }
             }
         )*
@@ -60,8 +67,74 @@ use std::rc::Rc;
 use std::sync::Arc;
 box_completer! { Box Rc Arc }
 
-/// A `Completer` for file and folder names.
-pub struct FilenameCompleter {
+/// Given a `line` and a cursor `pos`ition,
+/// try to find backward the start of a word.
+/// Return (0, `line[..pos]`) if no break char has been found.
+/// Return the word and its start position (idx, `line[idx..pos]`) otherwise.
+pub fn extract_word<'l>(line: &'l str,
+                        pos: usize,
+                        esc_char: Option<char>,
+                        break_chars: &BTreeSet<char>)
+                        -> (usize, &'l str) {
+    let line = &line[..pos];
+    if line.is_empty() {
+        return (0, line);
+    }
+    let mut start = None;
+    for (i, c) in line.char_indices().rev() {
+        if esc_char.is_some() && start.is_some() {
+            if esc_char.unwrap() == c {
+                // escaped break char
+                start = None;
+                continue;
+            } else {
+                break;
+            }
+        }
+        if break_chars.contains(&c) {
+            start = Some(i + c.len_utf8());
+            if esc_char.is_none() {
+                break;
+            } // else maybe escaped...
+        }
+    }
+
+    match start {
+        Some(start) => (start, &line[start..]),
+        None => (0, line),
+    }
+}
+
+pub fn longest_common_prefix(candidates: &[String]) -> Option<&str> {
+    if candidates.is_empty() {
+        return None;
+    } else if candidates.len() == 1 {
+        return Some(&candidates[0]);
+    }
+    let mut longest_common_prefix = 0;
+    'o: loop {
+        for (i, c1) in candidates.iter().enumerate().take(candidates.len() - 1) {
+            let b1 = c1.as_bytes();
+            let b2 = candidates[i + 1].as_bytes();
+            if b1.len() <= longest_common_prefix || b2.len() <= longest_common_prefix ||
+               b1[longest_common_prefix] != b2[longest_common_prefix] {
+                break 'o;
+            }
+        }
+        longest_common_prefix += 1;
+    }
+    while !candidates[0].is_char_boundary(longest_common_prefix) {
+        longest_common_prefix -= 1;
+    }
+    if longest_common_prefix == 0 {
+        return None;
+    }
+    Some(&candidates[0][0..longest_common_prefix])
+}
+
+    /*
+/// A `Delegate` for file and folder names.
+pub struct FilenameDelegate {
     break_chars: BTreeSet<char>,
 }
 
@@ -77,19 +150,19 @@ static DEFAULT_BREAK_CHARS: [char; 17] = [' ', '\t', '\n', '"', '\'', '`', '@', 
 #[cfg(windows)]
 static ESCAPE_CHAR: Option<char> = None;
 
-impl FilenameCompleter {
-    pub fn new() -> FilenameCompleter {
-        FilenameCompleter { break_chars: DEFAULT_BREAK_CHARS.iter().cloned().collect() }
+impl FilenameDelegate {
+    pub fn new() -> FilenameDelegate {
+        FilenameDelegate { break_chars: DEFAULT_BREAK_CHARS.iter().cloned().collect() }
     }
 }
 
-impl Default for FilenameCompleter {
-    fn default() -> FilenameCompleter {
-        FilenameCompleter::new()
+impl Default for FilenameDelegate {
+    fn default() -> FilenameDelegate {
+        FilenameDelegate::new()
     }
 }
 
-impl Completer for FilenameCompleter {
+impl Delegate for FilenameDelegate {
     fn complete(&self, line: &str, pos: usize) -> Result<(usize, Vec<String>)> {
         let (start, path) = extract_word(line, pos, ESCAPE_CHAR, &self.break_chars);
         let path = unescape(path, ESCAPE_CHAR);
@@ -198,71 +271,6 @@ fn filename_complete(path: &str,
     Ok(entries)
 }
 
-/// Given a `line` and a cursor `pos`ition,
-/// try to find backward the start of a word.
-/// Return (0, `line[..pos]`) if no break char has been found.
-/// Return the word and its start position (idx, `line[idx..pos]`) otherwise.
-pub fn extract_word<'l>(line: &'l str,
-                        pos: usize,
-                        esc_char: Option<char>,
-                        break_chars: &BTreeSet<char>)
-                        -> (usize, &'l str) {
-    let line = &line[..pos];
-    if line.is_empty() {
-        return (0, line);
-    }
-    let mut start = None;
-    for (i, c) in line.char_indices().rev() {
-        if esc_char.is_some() && start.is_some() {
-            if esc_char.unwrap() == c {
-                // escaped break char
-                start = None;
-                continue;
-            } else {
-                break;
-            }
-        }
-        if break_chars.contains(&c) {
-            start = Some(i + c.len_utf8());
-            if esc_char.is_none() {
-                break;
-            } // else maybe escaped...
-        }
-    }
-
-    match start {
-        Some(start) => (start, &line[start..]),
-        None => (0, line),
-    }
-}
-
-pub fn longest_common_prefix(candidates: &[String]) -> Option<&str> {
-    if candidates.is_empty() {
-        return None;
-    } else if candidates.len() == 1 {
-        return Some(&candidates[0]);
-    }
-    let mut longest_common_prefix = 0;
-    'o: loop {
-        for (i, c1) in candidates.iter().enumerate().take(candidates.len() - 1) {
-            let b1 = c1.as_bytes();
-            let b2 = candidates[i + 1].as_bytes();
-            if b1.len() <= longest_common_prefix || b2.len() <= longest_common_prefix ||
-               b1[longest_common_prefix] != b2[longest_common_prefix] {
-                break 'o;
-            }
-        }
-        longest_common_prefix += 1;
-    }
-    while !candidates[0].is_char_boundary(longest_common_prefix) {
-        longest_common_prefix -= 1;
-    }
-    if longest_common_prefix == 0 {
-        return None;
-    }
-    Some(&candidates[0][0..longest_common_prefix])
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -334,3 +342,5 @@ mod tests {
         assert_eq!(Some("f"), lcp);
     }
 }
+
+    */
