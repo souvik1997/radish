@@ -1,8 +1,8 @@
 //! Line buffer with current cursor position
 use std::iter;
 use std::ops::{Deref, Range};
-use unicode_segmentation::UnicodeSegmentation;
-use keymap::{At, CharSearch, Movement, RepeatCount, Word};
+use super::unicode_segmentation::UnicodeSegmentation;
+use super::keymap::{At, CharSearch, Movement, RepeatCount, Word};
 
 /// Maximum buffer size for the line read
 pub static MAX_LINE: usize = 4096;

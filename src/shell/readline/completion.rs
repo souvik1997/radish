@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{self, Path};
 
 use super::Result;
-use line_buffer::LineBuffer;
+use super::line_buffer::LineBuffer;
 
 // TODO: let the implementers choose/find word boudaries ???
 // (line, pos) is like (rl_line_buffer, rl_point) to make contextual completion ("select t.na| from tbl as t")

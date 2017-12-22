@@ -5,10 +5,10 @@ use std::io;
 use std::error;
 use std::fmt;
 #[cfg(unix)]
-use nix;
+use super::nix;
 
 #[cfg(unix)]
-use char_iter;
+use super::char_iter;
 
 /// The error type for Rustyline errors that can arise from
 /// I/O related errors or Errno when using the nix-rust library

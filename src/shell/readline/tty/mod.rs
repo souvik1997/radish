@@ -1,8 +1,8 @@
 //! This module implements and describes common TTY methods & traits
 use std::io::Write;
-use Result;
-use config::Config;
-use consts::KeyPress;
+use super::Result;
+use super::config::Config;
+use super::consts::KeyPress;
 
 /// Terminal state
 pub trait RawMode: Copy + Sized {

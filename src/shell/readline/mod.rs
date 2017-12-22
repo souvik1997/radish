@@ -16,10 +16,7 @@
 //! ```
 #![allow(unknown_lints)]
 
-extern crate libc;
 extern crate encode_unicode;
-#[macro_use]
-extern crate log;
 extern crate unicode_segmentation;
 extern crate unicode_width;
 #[cfg(unix)]
@@ -50,20 +47,20 @@ use std::mem;
 use std::path::Path;
 use std::rc::Rc;
 use std::result;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use self::unicode_segmentation::UnicodeSegmentation;
+use self::unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use tty::{RawMode, RawReader, Terminal, Term};
+use self::tty::{RawMode, RawReader, Terminal, Term};
 
-use encode_unicode::CharExt;
-use completion::{Completer, longest_common_prefix};
-use history::{Direction, History};
-use line_buffer::{LineBuffer, MAX_LINE, WordAction};
-pub use keymap::{Anchor, At, CharSearch, Cmd, Movement, RepeatCount, Word};
-use keymap::EditState;
-use kill_ring::{Mode, KillRing};
-pub use config::{CompletionType, Config, EditMode, HistoryDuplicates};
-pub use consts::KeyPress;
+use self::encode_unicode::CharExt;
+use self::completion::{Completer, longest_common_prefix};
+use self::history::{Direction, History};
+use self::line_buffer::{LineBuffer, MAX_LINE, WordAction};
+pub use self::keymap::{Anchor, At, CharSearch, Cmd, Movement, RepeatCount, Word};
+use self::keymap::EditState;
+use self::kill_ring::{Mode, KillRing};
+pub use self::config::{CompletionType, Config, EditMode, HistoryDuplicates};
+pub use self::consts::KeyPress;
 
 /// The error type for I/O and Linux Syscalls (Errno)
 pub type Result<T> = result::Result<T, error::ReadlineError>;

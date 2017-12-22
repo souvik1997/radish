@@ -3,10 +3,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use config::Config;
-use config::EditMode;
-use consts::KeyPress;
-use tty::RawReader;
+use super::config::Config;
+use super::config::EditMode;
+use super::consts::KeyPress;
+use super::tty::RawReader;
 use super::Result;
 
 pub type RepeatCount = usize;

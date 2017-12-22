@@ -10,7 +10,7 @@ use std::path::Path;
 use libc;
 
 use super::Result;
-use config::{Config, HistoryDuplicates};
+use super::config::{Config, HistoryDuplicates};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {

@@ -4,16 +4,16 @@ use std::io::{self, Read, Stdout, Write};
 use std::sync;
 use std::sync::atomic;
 use libc;
-use nix;
-use nix::poll;
-use nix::sys::signal;
-use nix::sys::termios;
+use super::super::nix;
+use super::super::nix::poll;
+use super::super::nix::sys::signal;
+use super::super::nix::sys::termios;
 
-use char_iter;
-use config::Config;
-use consts::{self, KeyPress};
-use Result;
-use error;
+use super::super::char_iter;
+use super::super::config::Config;
+use super::super::consts::{self, KeyPress};
+use super::super::Result;
+use super::super::error;
 use super::{RawMode, RawReader, Term};
 
 const STDIN_FILENO: libc::c_int = libc::STDIN_FILENO;
@@ -291,11 +291,11 @@ impl Term for PosixTerminal {
     }
 
     fn enable_raw_mode(&self) -> Result<Mode> {
-        use nix::errno::Errno::ENOTTY;
-        use nix::sys::termios::{BRKINT, CS8, ECHO, ICANON, ICRNL, IEXTEN, INPCK, ISIG, ISTRIP,
+        use self::nix::errno::Errno::ENOTTY;
+        use self::nix::sys::termios::{BRKINT, CS8, ECHO, ICANON, ICRNL, IEXTEN, INPCK, ISIG, ISTRIP,
                                 IXON, /* OPOST, */ VMIN, VTIME};
         if !self.stdin_isatty {
-            try!(Err(nix::Error::from_errno(ENOTTY)));
+            try!(Err(self::nix::Error::from_errno(ENOTTY)));
         }
         let original_mode = try!(termios::tcgetattr(STDIN_FILENO));
         let mut raw = original_mode;
@@ -338,8 +338,8 @@ impl Term for PosixTerminal {
 #[cfg(unix)]
 pub fn suspend() -> Result<()> {
     // For macos:
-    try!(signal::kill(nix::unistd::getppid(), signal::SIGTSTP));
-    try!(signal::kill(nix::unistd::getpid(), signal::SIGTSTP));
+    try!(signal::kill(self::nix::unistd::getppid(), signal::SIGTSTP));
+    try!(signal::kill(self::nix::unistd::getpid(), signal::SIGTSTP));
     Ok(())
 }
 
