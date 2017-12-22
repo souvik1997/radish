@@ -19,7 +19,7 @@ pub trait Delegate {
         line.replace(start..end, elected)
     }
 
-    fn prompt(&self) -> String;
+    fn prompt(&self, color: bool) -> String;
 }
 
 impl Delegate for () {
@@ -29,7 +29,7 @@ impl Delegate for () {
     fn update(&self, _line: &mut LineBuffer, _start: usize, _elected: &str) {
         unreachable!()
     }
-    fn prompt(&self) -> String {
+    fn prompt(&self, color: bool) -> String {
         String::from("$ ")
     }
 }
@@ -41,8 +41,8 @@ impl<'c, C: ?Sized + Delegate> Delegate for &'c C {
     fn update(&self, line: &mut LineBuffer, start: usize, elected: &str) {
         (**self).update(line, start, elected)
     }
-    fn prompt(&self) -> String {
-        (**self).prompt()
+    fn prompt(&self, color: bool) -> String {
+        (**self).prompt(color)
     }
 }
 macro_rules! box_completer {
@@ -55,8 +55,8 @@ macro_rules! box_completer {
                 fn update(&self, line: &mut LineBuffer, start: usize, elected: &str) {
                     (**self).update(line, start, elected)
                 }
-                fn prompt(&self) -> String {
-                    (**self).prompt()
+                fn prompt(&self, color: bool) -> String {
+                    (**self).prompt(color)
                 }
             }
         )*

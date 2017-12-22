@@ -870,7 +870,7 @@ fn readline_edit<C: Delegate>(prompt: &str,
                                editor: &mut Editor<C>,
                                original_mode: tty::Mode)
                                -> Result<String> {
-    let delegate = editor.delegate.as_ref().map(|c| c as &Delegate);
+    let delegate = &editor.delegate;
 
     let mut stdout = editor.term.create_writer();
 
@@ -894,8 +894,8 @@ fn readline_edit<C: Delegate>(prompt: &str,
         }
 
         // autocomplete
-        if cmd == Cmd::Complete && delegate.is_some() {
-            let next = try!(complete_line(&mut rdr, &mut s, delegate.unwrap(), &editor.config));
+        if cmd == Cmd::Complete {
+            let next = try!(complete_line(&mut rdr, &mut s, delegate, &editor.config));
             if next.is_some() {
                 cmd = next.unwrap();
             } else {
@@ -1137,23 +1137,23 @@ fn readline_direct() -> Result<String> {
 pub struct Editor<C: Delegate> {
     term: Terminal,
     history: History,
-    delegate: Option<C>,
+    delegate: C,
     kill_ring: KillRing,
     config: Config,
     custom_bindings: Rc<RefCell<HashMap<KeyPress, Cmd>>>,
 }
 
 impl<C: Delegate> Editor<C> {
-    pub fn new() -> Editor<C> {
-        Self::with_config(Config::default())
+    pub fn new(delegate: C) -> Editor<C> {
+        Self::with_config(Config::default(), delegate)
     }
 
-    pub fn with_config(config: Config) -> Editor<C> {
+    pub fn with_config(config: Config, delegate: C) -> Editor<C> {
         let term = Terminal::new();
         Editor {
             term: term,
             history: History::with_config(config),
-            delegate: None,
+            delegate: delegate,
             kill_ring: KillRing::new(60),
             config: config,
             custom_bindings: Rc::new(RefCell::new(HashMap::new())),
@@ -1161,11 +1161,12 @@ impl<C: Delegate> Editor<C> {
     }
 
     /// This method will read a line from STDIN and will display a `prompt`
-    pub fn readline(&mut self, prompt: &str) -> Result<String> {
+    pub fn readline(&mut self) -> Result<String> {
         if self.term.is_unsupported() {
             debug!(target: "rustyline", "unsupported terminal");
             // Write prompt and flush it to stdout
             let mut stdout = io::stdout();
+            let prompt = self.delegate.prompt(false);
             try!(write_and_flush(&mut stdout, prompt.as_bytes()));
 
             readline_direct()
@@ -1174,7 +1175,7 @@ impl<C: Delegate> Editor<C> {
             // Not a tty: read from file / pipe.
             readline_direct()
         } else {
-            readline_raw(prompt, self)
+            readline_raw(&self.delegate.prompt(true), self)
         }
     }
 
@@ -1201,11 +1202,6 @@ impl<C: Delegate> Editor<C> {
     /// Return an immutable reference to the history object.
     pub fn get_history_const(&self) -> &History {
         &self.history
-    }
-
-    /// Register a callback function to be called for tab-completion.
-    pub fn set_delegate(&mut self, delegate: Option<C>) {
-        self.delegate = delegate;
     }
 
     /// Bind a sequence to a command.
@@ -1259,7 +1255,7 @@ impl<'a, C: Delegate> Iterator for Iter<'a, C> {
     type Item = Result<String>;
 
     fn next(&mut self) -> Option<Result<String>> {
-        let readline = self.editor.readline(self.prompt);
+        let readline = self.editor.readline();
         match readline {
             Ok(l) => {
                 self.editor.add_history_entry(l.as_ref()); // TODO Validate

@@ -14,8 +14,7 @@ pub struct Shell {
 impl Shell {
     pub fn new() -> Self {
         let state = Arc::new(ShellState::new());
-        let mut readline = readline::Editor::<Arc<ShellState>>::new();
-        readline.set_delegate(Some(Arc::clone(&state)));
+        let readline = readline::Editor::<Arc<ShellState>>::new(Arc::clone(&state));
         Shell {
             readline: readline,
             state: state
@@ -24,7 +23,7 @@ impl Shell {
 
     pub fn run_interactive(&mut self) {
         loop {
-            let input = self.readline.readline("> ");
+            let input = self.readline.readline();
             match input {
                 Ok(command) => {
                     println!("Got command {}", command);
