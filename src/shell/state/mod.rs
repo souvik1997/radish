@@ -1,7 +1,6 @@
 use super::readline;
 use super::jobs::Job;
 use std::env;
-use super::super::sys;
 extern crate users;
 extern crate ansi_term;
 use self::ansi_term::Colour;

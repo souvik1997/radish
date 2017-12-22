@@ -1,26 +1,43 @@
 use std::process;
-use super::super::sys;
+use nix;
+use std::ffi::CString;
 pub struct Job {
-    pid: u32
+    pid: i32
 }
 
 impl Job {
     pub fn new(binary: &str, args: &[&str]) -> Option<Self> {
-        if let Ok(fork_result) = unsafe {sys::fork()} {
-            if fork_result == 0 {
-                match sys::execve(binary, args, false) {
-                    Err(_) => process::exit(-1),
-                    Ok(_) => unreachable!()
+
+        if let Ok(binary_cstring) = CString::new(binary) {
+            let mut args_cstring: Vec<CString> = Vec::new();
+            args_cstring.push(binary_cstring.clone());
+            for arg in args {
+                if let Ok(arg_cstring) = CString::new(*arg) {
+                    args_cstring.push(arg_cstring);
+                } else {
+                    return None;
+                }
+            }
+            if let Ok(fork_result) = nix::unistd::fork() {
+                match fork_result {
+                    nix::unistd::ForkResult::Parent{child} => {
+                        Some(Job{ pid: child })
+                    }
+                    nix::unistd::ForkResult::Child => {
+                        nix::unistd::execvp(&binary_cstring, &args_cstring);
+                        process::exit(-1);
+                    }
                 }
             } else {
-                Some(Job { pid: fork_result })
+                None
             }
         } else {
             None
         }
+
     }
 
     pub fn wait(&self) {
-        sys::waitpid(self.pid, 0);
+        nix::sys::wait::waitpid(self.pid, None);
     }
 }

@@ -4,8 +4,9 @@ extern crate log;
 #[macro_use]
 extern crate nom;
 
+extern crate nix;
+
 mod shell;
-mod sys;
 
 fn main() {
     let mut s = shell::Shell::new();
