@@ -5,6 +5,7 @@ mod syntax;
 mod state;
 mod jobs;
 use self::state::ShellState;
+use nom;
 
 pub struct Shell {
     readline: readline::Editor<Arc<ShellState>>,
@@ -27,7 +28,9 @@ impl Shell {
             match input {
                 Ok(command) => {
                     println!("Got command {}", command);
-                    syntax::lexer::test_lex(&command);
+                    if let nom::IResult::Done(_, tokens) = syntax::lexer::lex(&command) {
+                        println!("{:?}", syntax::parser::parse(&tokens));
+                    }
                     // TODO: use tokenized output to construct argv
                     let split: Vec<&str> = command.split_whitespace().collect();
                     if let Some(binary) = split.first() {

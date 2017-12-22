@@ -13,6 +13,14 @@ named!(redirect_operator<&str, Token>,
        )
 );
 
+named!(redirect_fd_operator<&str, Token>,
+       do_parse!(
+           i: opt_res!(map_res!(digit, FromStr::from_str)) >>
+               tag!(">&") >>
+               j: map_res!(digit, FromStr::from_str) >>(Token::RedirectFD(i.unwrap_or(1), j))
+       )
+);
+
 named!(append_operator<&str, Token>,
        do_parse!(
            i: opt_res!(map_res!(digit, FromStr::from_str)) >>
@@ -51,6 +59,7 @@ named!(operator<&str, Token>,
        alt_complete!(
            ws!(pipe_operator) |
            ws!(append_operator) |
+           ws!(redirect_fd_operator) |
            ws!(redirect_operator) |
            ws!(input_operator) |
            ws!(appendall_operator) |
@@ -145,6 +154,6 @@ named!(lex_all<&str, Vec<Token>>,
 );
 
 
-pub fn test_lex(s: &str) {
-    println!("{:?}", lex_all(s));
+pub fn lex(s: &str) -> IResult<&str, Vec<Token>> {
+    lex_all(s)
 }
