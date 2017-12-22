@@ -1,8 +1,6 @@
 use super::readline;
+use super::jobs::Job;
 
-pub struct Job {
-    child_pid: u32
-}
 
 pub struct ShellState {
     jobs: Vec<Job>,

@@ -3,6 +3,7 @@ use std::sync::Arc;
 mod readline;
 mod syntax;
 mod state;
+mod jobs;
 use self::state::ShellState;
 
 pub struct Shell {
@@ -28,6 +29,13 @@ impl Shell {
                 Ok(command) => {
                     println!("Got command {}", command);
                     syntax::lexer::test_lex(&command);
+                    // TODO: use tokenized output to construct argv
+                    let split: Vec<&str> = command.split_whitespace().collect();
+                    if let Some(binary) = split.first() {
+                        if let Some(job) = jobs::Job::new(&binary, &split) {
+                            job.wait();
+                        }
+                    }
                 }
                 Err(_) => {
                     println!("Error when reading input!");

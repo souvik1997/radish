@@ -5,6 +5,7 @@ extern crate log;
 extern crate nom;
 
 mod shell;
+mod sys;
 
 fn main() {
     let mut s = shell::Shell::new();
