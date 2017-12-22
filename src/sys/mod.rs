@@ -68,6 +68,7 @@ pub(crate) fn execve(prog: &str, args: &[&str], clear_env: bool) -> io::Result<(
 
     // Create the arguments vector
     let mut cvt_args: Vec<CString> = Vec::new();
+    cvt_args.push(prog_str.clone());
     for arg in args.iter() {
         match CString::new(*arg) {
             Ok(arg) => cvt_args.push(arg),
