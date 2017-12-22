@@ -3,6 +3,10 @@ extern crate libc;
 extern crate log;
 #[macro_use]
 extern crate nom;
+
+mod shell;
+
 fn main() {
-    println!("Hello, world!");
+    let mut s = shell::Shell::new();
+    s.run_interactive();
 }

@@ -145,6 +145,6 @@ named!(lex_all<&str, Vec<Token>>,
 );
 
 
-pub fn lex(s: &str) {
+pub fn test_lex(s: &str) {
     println!("{:?}", lex_all(s));
 }
