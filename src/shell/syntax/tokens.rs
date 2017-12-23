@@ -8,5 +8,6 @@ pub enum Token {
     RedirectAll,
     AppendAll,
     Background,
-    Input(u32)
+    Input(u32),
+    Subshell
 }

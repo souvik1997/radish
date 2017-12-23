@@ -13,5 +13,6 @@ pub enum OtherArgument<'a> {
     RedirectFD(u32, u32),
     Append(u32, &'a str),
     Input(u32, &'a str),
-    Background
+    Background,
+    Subshell(Rc<Expr<'a>>)
 }

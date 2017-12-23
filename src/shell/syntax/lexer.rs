@@ -46,6 +46,12 @@ named!(background_operator<&str, Token>,
        )
 );
 
+named!(subshell_operator<&str, Token>,
+       do_parse!(
+           tag!("`") >> (Token::Subshell)
+       )
+);
+
 named!(input_operator<&str, Token>,
        do_parse!(
            i: opt_res!(map_res!(digit, FromStr::from_str)) >>
@@ -64,7 +70,8 @@ named!(operator<&str, Token>,
            ws!(input_operator) |
            ws!(appendall_operator) |
            ws!(redirectall_operator) |
-           ws!(background_operator)
+           ws!(background_operator) |
+           ws!(subshell_operator)
        )
 );
 
@@ -112,7 +119,7 @@ fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token> where F: (Fn(
 
 fn bare_string(input: &str) -> IResult<&str, Token> {
     match_string(input, |c| {
-        char::is_whitespace(c) || c == '>' || c == '<' || c == '|'
+        char::is_whitespace(c) || c == '>' || c == '<' || c == '|' || c == '&' || c == '`'
     })
 }
 

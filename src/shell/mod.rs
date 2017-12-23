@@ -29,6 +29,7 @@ impl Shell {
                 Ok(command) => {
                     println!("Got command {}", command);
                     if let nom::IResult::Done(_, tokens) = syntax::lexer::lex(&command) {
+                        println!("lexed: {:?}", tokens);
                         if let Some(expr) = syntax::parser::parse(&tokens) {
                             self.evaluate(&expr);
                         }
@@ -42,6 +43,7 @@ impl Shell {
     }
 
     fn evaluate(&mut self, expr: &syntax::ast::Expr) {
+        println!("expr: {:?}", expr);
         match expr {
             &syntax::ast::Expr::Command(ref binary, ref arguments, ref other_arguments) => {
                 if other_arguments.len() > 0 {

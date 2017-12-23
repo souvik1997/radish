@@ -7,16 +7,15 @@ use std::rc::Rc;
 fn parse_one<'a>(t: &'a [Token]) -> Option<Expr> {
     let mut arguments: Vec<&'a str> = Vec::new();
     let mut other_arguments: Vec<OtherArgument> = Vec::new();
-    let mut iter = t.iter();
+    let mut iter = t.iter().enumerate();
     let binary: Option<&'a str> = {
-        if let Some(&Token::StringLiteral(ref first)) = iter.next() {
+        if let Some((_, &Token::StringLiteral(ref first))) = iter.next() {
             Some(first)
         } else {
             None
         }
     };
-    let mut index = 1;
-    while let Some(token) = iter.next() {
+    while let Some((index, token)) = iter.next() {
         match token {
             &Token::StringLiteral(ref s) => arguments.push(s),
             &Token::Pipe => {
@@ -30,44 +29,54 @@ fn parse_one<'a>(t: &'a [Token]) -> Option<Expr> {
                     return None;
                 }
             },
+            &Token::Subshell => {
+                iter.next();
+                if let Some((next_index, _)) = iter.find(|&(_, tk)| {
+                    tk == &Token::Subshell
+                }) {
+                    if let Some(inner) = parse_one(&t[index+1..next_index]) {
+                        other_arguments.push(OtherArgument::Subshell(Rc::new(inner)));
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+
+            },
             &Token::Redirect(fd) => {
-                if let Some(&Token::StringLiteral(ref target)) = iter.next() {
+                if let Some((_, &Token::StringLiteral(ref target))) = iter.next() {
                     other_arguments.push(OtherArgument::Redirect(fd, target));
-                    index += 1;
                 } else {
                     return None;
                 }
             },
             &Token::Append(fd) => {
-                if let Some(&Token::StringLiteral(ref target)) = iter.next() {
+                if let Some((_, &Token::StringLiteral(ref target))) = iter.next() {
                     other_arguments.push(OtherArgument::Append(fd, target));
-                    index += 1;
                 } else {
                     return None;
                 }
             },
             &Token::RedirectAll => {
-                if let Some(&Token::StringLiteral(ref target)) = iter.next() {
+                if let Some((_, &Token::StringLiteral(ref target))) = iter.next() {
                     other_arguments.push(OtherArgument::Redirect(1, target));
                     other_arguments.push(OtherArgument::Redirect(2, target));
-                    index += 1;
                 } else {
                     return None;
                 }
             },
             &Token::AppendAll => {
-                if let Some(&Token::StringLiteral(ref target)) = iter.next() {
+                if let Some((_, &Token::StringLiteral(ref target))) = iter.next() {
                     other_arguments.push(OtherArgument::Append(1, target));
                     other_arguments.push(OtherArgument::Append(2, target));
-                    index += 1;
                 } else {
                     return None;
                 }
             },
             &Token::Input(fd) => {
-                if let Some(&Token::StringLiteral(ref target)) = iter.next() {
+                if let Some((_, &Token::StringLiteral(ref target))) = iter.next() {
                     other_arguments.push(OtherArgument::Input(fd, target));
-                    index += 1;
                 } else {
                     return None;
                 }
