@@ -1,6 +1,6 @@
 #[derive(PartialEq, Debug, Clone)]
-pub enum Token {
-    StringLiteral(String),
+pub enum Token<'a> {
+    StringLiteral(Vec<StringLiteralComponent<'a>>),
     Pipe,
     Redirect(u32),
     RedirectFD(u32,u32),
@@ -9,5 +9,11 @@ pub enum Token {
     AppendAll,
     Background,
     Input(u32),
-    Subshell
+    Subshell,
+}
+
+#[derive(PartialEq, Debug, Clone)]
+pub enum StringLiteralComponent<'a> {
+    Literal(&'a str),
+    EnvVar(&'a str)
 }

@@ -84,36 +84,100 @@ named!(quoted_string<&str, Token>,
        )
 );
 
+#[derive(Debug, Clone)]
+enum State {
+    Base,
+    ExpectVarOpen,
+    VarOpen,
+    VarClose,
+    Escaped,
+    InVar,
+    HomeExpansion,
+}
+
 fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token> where F: (Fn(char) -> bool) {
-    let mut new_string_components: Vec<&str> = Vec::new();
-    let mut escaped = false;
+    let mut new_string_components: Vec<StringLiteralComponent> = Vec::new();
     let mut end_position = input.len();
-    let mut last_escaped = 0;
+    let mut state = State::Base;
+    let mut last_base = 0;
+    let mut last_var = 0;
     for (i, c) in input.char_indices() {
-        if !escaped && filter(c) {
-            end_position = i;
-            break;
-        }
-        if !escaped && c == '\\' {
-            new_string_components.push(&input[last_escaped..i]);
-            escaped = true;
-        } else if escaped {
-            last_escaped = i;
-            escaped = false;
+        match state {
+            State::Base => {
+                if filter(c) {
+                    end_position = i;
+                    break;
+                }
+                if c == '\\' {
+                    if last_base < i {
+                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
+                    }
+                    state = State::Escaped;
+                }
+                if c == '$' {
+                    if last_base < i {
+                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
+                    }
+                    state = State::ExpectVarOpen;
+                }
+                if c == '~' {
+                    if last_base < i {
+                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
+                    }
+                    new_string_components.push(StringLiteralComponent::EnvVar("HOME"));
+                    state = State::HomeExpansion;
+                }
+            },
+            State::HomeExpansion => {
+                last_base = i;
+                state = State::Base;
+            }
+            State::Escaped => {
+                last_base = i;
+                state = State::Base;
+            },
+            State::ExpectVarOpen => {
+                if c == '{' {
+                    state = State::VarOpen;
+                } else {
+                    return IResult::Error(ErrorKind::IsNot)
+                }
+            },
+            State::VarOpen => {
+                last_var = i;
+                state = State::InVar;
+            }
+            State::InVar => {
+                if c == '}' {
+                    new_string_components.push(StringLiteralComponent::EnvVar(&input[last_var..i]));
+                    state = State::VarClose;
+                }
+            },
+            State::VarClose => {
+                last_base = i;
+                state = State::Base;
+            }
         }
     }
-    new_string_components.push(&input[last_escaped..end_position]);
-    /*
-    input.find(|c| {
-        char::is_whitespace(c) || c == '>' || c == '<' || c == '|'
-    }).unwrap_or(input.len());
-    */
+
+    match state {
+        State::Base => {
+            if last_base < end_position {
+                new_string_components.push(StringLiteralComponent::Literal(&input[last_base..end_position]));
+            }
+        },
+        State::VarClose => {},
+        State::HomeExpansion => {},
+        _ => {
+            return IResult::Error(ErrorKind::IsNot)
+        }
+    }
 
     let (head, tail) = input.split_at(end_position);
     if head.len() == 0 {
         IResult::Error(ErrorKind::LengthValue)
     } else {
-        IResult::Done(tail, Token::StringLiteral(new_string_components.join("")))
+        IResult::Done(tail, Token::StringLiteral(new_string_components))
     }
 }
 
@@ -161,6 +225,6 @@ named!(lex_all<&str, Vec<Token>>,
 );
 
 
-pub fn lex(s: &str) -> IResult<&str, Vec<Token>> {
+pub fn lex<'a>(s: &'a str) -> IResult<&str, Vec<Token<'a>>> {
     lex_all(s)
 }

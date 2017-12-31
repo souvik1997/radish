@@ -38,7 +38,12 @@ impl Shell {
                         if let nom::IResult::Done(_, tokens) = syntax::lexer::lex(&command) {
                             println!("lexed: {:?}", tokens);
                             if let Some(expr) = syntax::parser::parse(&tokens) {
-                                self.evaluate(&expr);
+                                if let Ok(mut job) = jobs::Job::new(&expr) {
+                                    job.run();
+                                } else {
+                                    println!("error when constructing job");
+                                }
+
                             }
                         }
                     }
@@ -48,23 +53,6 @@ impl Shell {
                 Err(_) => {
                     println!("Error when reading input!");
                 }
-            }
-        }
-    }
-
-    fn evaluate(&mut self, expr: &syntax::ast::Expr) {
-        println!("expr: {:?}", expr);
-        match expr {
-            &syntax::ast::Expr::Command(ref binary, ref arguments, ref other_arguments) => {
-                if other_arguments.len() > 0 {
-                    println!("Other arguments (not implemented): {:?}", other_arguments);
-                }
-                if let Some(job) = jobs::Job::new(&binary, &arguments) {
-                    job.wait();
-                }
-            }
-            &syntax::ast::Expr::Pipeline(_, _) => {
-                println!("pipelines not implemented!");
             }
         }
     }
