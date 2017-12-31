@@ -89,7 +89,22 @@ impl jobs::BuiltinHandler for ShellState {
             let func = Box::deref_mut(b);
             func(args, fd_options)
         } else {
-            -1
+            let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
+            if let Some(value) = self.ketos_interp.scope().get_value(ketos_name) {
+                let result = self.ketos_interp.call_value(value, args.into_iter().map(|s| { ketos::Value::String(ketos::rc_vec::RcString::new(s.clone())) }).collect());
+                match result {
+                    Ok(val) => {
+                        self.ketos_interp.display_value(&val);
+                        0
+                    },
+                    Err(error) => {
+                        println!("error: {:?}", error);
+                        -1
+                    }
+                }
+            } else {
+                -1
+            }
         }
     }
 
