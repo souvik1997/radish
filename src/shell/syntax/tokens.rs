@@ -1,14 +1,16 @@
+use std::os::unix::io::RawFd;
+
 #[derive(PartialEq, Debug, Clone)]
 pub enum Token<'a> {
     StringLiteral(Vec<StringLiteralComponent<'a>>),
     Pipe,
-    Redirect(u32),
-    RedirectFD(u32,u32),
-    Append(u32),
+    Redirect(RawFd),
+    RedirectFD(RawFd,RawFd),
+    Append(RawFd),
     RedirectAll,
     AppendAll,
     Background,
-    Input(u32),
+    Input(RawFd),
     Subshell,
 }
 

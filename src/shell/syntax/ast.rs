@@ -1,5 +1,6 @@
 use super::tokens::*;
 use std::rc::Rc;
+use std::os::unix::io::RawFd;
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Expr<'a> {
@@ -9,10 +10,10 @@ pub enum Expr<'a> {
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Argument<'a> {
-    Redirect(u32, &'a [StringLiteralComponent<'a>]),
-    RedirectFD(u32, u32),
-    Append(u32, &'a [StringLiteralComponent<'a>]),
-    Input(u32, &'a [StringLiteralComponent<'a>]),
+    Redirect(RawFd, &'a [StringLiteralComponent<'a>]),
+    RedirectFD(RawFd, RawFd),
+    Append(RawFd, &'a [StringLiteralComponent<'a>]),
+    Input(RawFd, &'a [StringLiteralComponent<'a>]),
     Background,
     Subshell(Rc<Expr<'a>>),
     Literal(&'a [StringLiteralComponent<'a>]),

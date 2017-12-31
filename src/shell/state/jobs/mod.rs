@@ -9,32 +9,35 @@ use std::rc::Rc;
 use std::path::PathBuf;
 use std::env;
 use std::fmt;
+use std::cell::Cell;
+use std::os::unix::io::RawFd;
 
 #[derive(Debug)]
-pub enum FdOptions {
+pub enum FdOption {
     Append(PathBuf),
     Overwrite(PathBuf),
     Input(PathBuf),
-    Fd(u32),
+    Fd(RawFd),
 }
 
 #[derive(Debug)]
 pub enum Configuration {
-    Command(PathBuf, Vec<String>, HashMap<u32, FdOptions>),
-    Builtin(String, Vec<String>, HashMap<u32, FdOptions>),
+    Command(PathBuf, Vec<String>, HashMap<RawFd, FdOption>),
+    Builtin(String, Vec<String>, HashMap<RawFd, FdOption>),
     Pipeline(Rc<Job>, Rc<Job>)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Status {
     NotStarted,
-    Running(u32),
-    Done
+    Running(nix::libc::pid_t),
+    Done(i8)
 }
 
 #[derive(Debug)]
 pub enum Error {
     Fork,
+    StringEncoding,
     Subshell(Rc<Error>),
     CommandNotFound(PathBuf),
     CorruptPath,
@@ -44,14 +47,14 @@ pub enum Error {
 
 #[derive(Debug)]
 pub struct Job {
-    status: Status,
+    status: Cell<Status>,
     pub output: Option<String>,
     configuration: Configuration,
     pub background: bool
 }
 
 pub trait BuiltinHandler {
-    fn handle_builtin(&mut self, name: &str, args: &[String], fd_options: &HashMap<u32, FdOptions>) -> i32;
+    fn handle_builtin(&mut self, name: &str, args: &[String]) -> i8;
     fn is_builtin(&mut self, name: &str) -> bool;
 }
 
@@ -59,17 +62,17 @@ impl Job {
     pub fn from_expr<B: BuiltinHandler>(expr: &Expr, builtin_handler: &mut B) -> Result<Job, Error> {
         match expr {
             &Expr::Command(binary, ref arguments) => {
-                let mut fd_options = HashMap::<u32, FdOptions>::new();
+                let mut fd_options = HashMap::<RawFd, FdOption>::new();
                 let mut background = false;
                 let mut str_arguments = Vec::<String>::new();
                 for arg in arguments {
                     match arg {
                         &Argument::Redirect(fd, path) => {
-                            fd_options.insert(fd, FdOptions::Overwrite(PathBuf::from(join_components(path))));
+                            fd_options.insert(fd, FdOption::Overwrite(PathBuf::from(join_components(path))));
                         },
-                        &Argument::RedirectFD(fd, target) => { fd_options.insert(fd, FdOptions::Fd(target)); },
-                        &Argument::Append(fd, path) => { fd_options.insert(fd, FdOptions::Append(PathBuf::from(join_components(path)))); },
-                        &Argument::Input(fd, path) => { fd_options.insert(fd, FdOptions::Input(PathBuf::from(join_components(path)))); },
+                        &Argument::RedirectFD(fd, target) => { fd_options.insert(fd, FdOption::Fd(target)); },
+                        &Argument::Append(fd, path) => { fd_options.insert(fd, FdOption::Append(PathBuf::from(join_components(path)))); },
+                        &Argument::Input(fd, path) => { fd_options.insert(fd, FdOption::Input(PathBuf::from(join_components(path)))); },
                         &Argument::Background => { background = true; },
                         &Argument::Subshell(ref subexpr) => {
                             match Job::from_expr(&subexpr, builtin_handler) {
@@ -96,7 +99,7 @@ impl Job {
                 let binary_str = join_components(binary);
                 if builtin_handler.is_builtin(&binary_str) {
                     Ok(Job {
-                        status: Status::NotStarted,
+                        status: Cell::new(Status::NotStarted),
                         output: None,
                         configuration: Configuration::Builtin(binary_str, str_arguments, fd_options),
                         background: background
@@ -113,7 +116,7 @@ impl Job {
                         }
                     }).next() {
                         Ok(Job {
-                            status: Status::NotStarted,
+                            status: Cell::new(Status::NotStarted),
                             output: None,
                             configuration: Configuration::Command(binary_appended_path, str_arguments, fd_options),
                             background: background
@@ -131,7 +134,7 @@ impl Job {
                 if let Ok(f) = first_result {
                     if let Ok(s) = second_result {
                         Ok(Job {
-                            status: Status::NotStarted,
+                            status: Cell::new(Status::NotStarted),
                             output: None,
                             configuration: Configuration::Pipeline(Rc::new(f), Rc::new(s)),
                             background: false
@@ -174,12 +177,45 @@ impl Job {
         */
     }
 
-    pub fn wait(&self) {
+    pub fn wait_until_complete(&self) -> nix::Result<nix::sys::wait::WaitStatus> {
+        self.wait(None)
+    }
+
+    fn wait(&self, flags: Option<nix::sys::wait::WaitPidFlag>) -> nix::Result<nix::sys::wait::WaitStatus> {
+        match self.configuration {
+            Configuration::Builtin(_, _, _) => {
+                if let Status::Done(status) = self.status.get() {
+                    Ok(nix::sys::wait::WaitStatus::Exited(nix::unistd::getpid(), status))
+                } else {
+                    panic!("builtin should not be running")
+                }
+            },
+            Configuration::Command(_, _, _) => {
+                match self.status.get() {
+                    Status::Done(status) => {
+                        Ok(nix::sys::wait::WaitStatus::Exited(nix::unistd::getpid(), status))
+                    },
+                    Status::Running(pid) => {
+                        let result = nix::sys::wait::waitpid(pid, flags);
+                        if let Ok(nix::sys::wait::WaitStatus::Exited(_, status)) = result {
+                            self.status.set(Status::Done(status));
+                        }
+                        result
+                    },
+                    Status::NotStarted => {
+                        Err(nix::Error::from_errno(nix::Errno::EINVAL))
+                    }
+                }
+            },
+            Configuration::Pipeline(_, ref second) => {
+                second.wait(flags)
+            }
+        }
         //nix::sys::wait::waitpid(self.pid, None);
     }
 
     pub fn run<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<Status, Error> {
-        println!("{:?}", self);
+        //println!("{:?}", self);
         self.run_with_fd(None, None, handler)
     }
 
@@ -187,14 +223,134 @@ impl Job {
         Ok(String::from(""))
     }
 
-    fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<u32>, output_fd: Option<u32>, handler: &mut B) -> Result<Status, Error> {
+    fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<RawFd>, output_fd: Option<RawFd>, handler: &mut B) -> Result<Status, Error> {
+        use nix::fcntl::*;
+        use nix::sys::stat::*;
+        fn apply_fd_changes(input_fd: Option<RawFd>, output_fd: Option<RawFd>, options: &HashMap<RawFd, FdOption>) -> (bool, Vec<(RawFd, RawFd)>) {
+            let mut log: Vec<(RawFd, RawFd)> = Vec::new();
+            if let Some(input) = input_fd {
+                match nix::unistd::dup(0) {
+                    Ok(saved) => log.push((0, saved)),
+                    Err(_) => return (false, log)
+                }
+                if let Err(_) = nix::unistd::dup2(input, 0) {
+                    return (false, log);
+                }
+            }
+            if let Some(output) = output_fd {
+                match nix::unistd::dup(1) {
+                    Ok(saved) => log.push((1, saved)),
+                    Err(_) => return (false, log)
+                }
+                if let Err(_) = nix::unistd::dup2(output, 0) {
+                    return (false, log);
+                }
+            }
+            for (src, opt) in options {
+                match nix::unistd::dup(*src) {
+                    Ok(saved) => log.push((*src, saved)),
+                    Err(_) => return (false, log)
+                }
+                match opt {
+                    &FdOption::Fd(dest) => {
+                        if let Err(_) = nix::unistd::dup2(dest, *src) {
+                            return (false, log)
+                        }
+                    },
+                    &FdOption::Append(ref path) => {
+                        match nix::fcntl::open(path, O_WRONLY | O_CREAT | O_APPEND, S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH) {
+                            Ok(newfd) => {
+                                if let Err(_) = nix::unistd::dup2(newfd, *src) {
+                                    return (false, log)
+                                }
+                            },
+                            Err(_) => return (false, log)
+                        }
+                    },
+                    &FdOption::Overwrite(ref path) => {
+                        match nix::fcntl::open(path, O_WRONLY | O_CREAT, S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH) {
+                            Ok(newfd) => {
+                                if let Err(_) = nix::unistd::dup2(newfd, *src) {
+                                    return (false, log)
+                                }
+                            },
+                            Err(_) => return (false, log)
+                        }
+                    },
+                    &FdOption::Input(ref path) => {
+                        match nix::fcntl::open(path, O_RDONLY, S_IWUSR /* ignored */) {
+                            Ok(newfd) => {
+                                if let Err(_) = nix::unistd::dup2(newfd, *src) {
+                                    return (false, log)
+                                }
+                            },
+                            Err(_) => return (false, log)
+                        }
+                    }
+
+                }
+            }
+            (true, log)
+        }
+
+        fn reverse_fd_changes(log: &Vec<(RawFd, RawFd)>) {
+            log.iter().rev().for_each(|&(src, saved)| {
+                if let Err(_) = nix::unistd::dup2(saved, src) {
+                    panic!("failed to revert file descriptors");
+                }
+            });
+        }
         match self.configuration {
             Configuration::Builtin(ref name, ref args, ref options) => {
-                handler.handle_builtin(&name, &args, &options);
+                let (success, log) = apply_fd_changes(input_fd, output_fd, options);
+                let mut result: i8 = -1;
+                if success {
+                    result = handler.handle_builtin(&name, &args);
+                }
+                reverse_fd_changes(&log);
+                self.status.set(Status::Done(result));
+                Ok(self.status.get())
+            },
+            Configuration::Command(ref path, ref args, ref options) => {
+                if let Some(path_str) = path.to_str() {
+                    if let Ok(binary_cstring) = CString::new(path_str) {
+                        let mut args_cstring: Vec<CString> = Vec::new();
+                        args_cstring.push(binary_cstring.clone());
+                        for arg in args {
+                            if let Ok(arg_cstring) = CString::new(arg.clone()) {
+                                args_cstring.push(arg_cstring);
+                            } else {
+                                return Err(Error::StringEncoding);
+                            }
+                        }
+                        if let Ok(fork_result) = nix::unistd::fork() {
+                            match fork_result {
+                                nix::unistd::ForkResult::Parent{child} => {
+                                    self.status.set(Status::Running(child));
+                                    Ok(self.status.get())
+                                },
+                                nix::unistd::ForkResult::Child => {
+                                    let (success, _) = apply_fd_changes(input_fd, output_fd, options);
+                                    if success {
+                                        match nix::unistd::execvp(&binary_cstring, &args_cstring) {
+                                            _ => { process::exit(-1) }
+                                        }
+                                    }
+                                    process::exit(-1);
+                                }
+                            }
+                        } else {
+                            Err(Error::Fork)
+                        }
+                    } else {
+                        Err(Error::StringEncoding)
+                    }
+                } else {
+                    Err(Error::StringEncoding)
+                }
             }
-            _ => {}
+            _ => { Err(Error::Fork) }
         }
-        Ok(Status::Running(0))
     }
 }
 

@@ -33,12 +33,15 @@ impl Shell {
                         match syntax::lexer::lex(&command) {
                             nom::IResult::Done(remaining, tokens) =>  {
                                 if remaining.len() == 0 {
-                                    println!("lexed: {:?}", tokens);
+                                    //println!("lexed: {:?}", tokens);
                                     match syntax::parser::parse(&tokens) {
                                         Ok(expr) => {
                                             match state.run_job(&expr) {
-                                                Ok(mut job) => {
-                                                    println!("job: {:?}", job);
+                                                Ok(ref mut job) => {
+                                                    match job.wait_until_complete() {
+                                                        Ok(_) => {},
+                                                        Err(error) => println!("error while running `{}`: {}", command, error)
+                                                    }
                                                 },
                                                 Err(error) => {
                                                     println!("error when constructing job: {:?}", error);
@@ -65,8 +68,8 @@ impl Shell {
                         }
                     }
                 }
-                Err(_) => {
-                    println!("Error when reading input!");
+                Err(error) => {
+                    println!("error while reading input: {:?}", error);
                 }
             }
         }

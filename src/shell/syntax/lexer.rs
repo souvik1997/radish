@@ -1,6 +1,7 @@
 use nom::*;
 use super::tokens::*;
 use std::str::FromStr;
+use std::os::unix::io::RawFd;
 
 named!(pipe_operator<&str, Token>,
        do_parse!(tag!("|") >> (Token::Pipe))

@@ -12,13 +12,14 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::ops::DerefMut;
+use std::process;
 
 
 pub struct ShellState {
     background_jobs: Vec<jobs::Job>,
     current_job: Option<Rc<jobs::Job>>,
     pub ketos_interp: Interpreter,
-    builtins: HashMap<String, Box<(FnMut(&[String], &HashMap<u32, jobs::FdOptions>) -> i32)>>
+    builtins: HashMap<String, Box<(FnMut(&[String]) -> i8)>>
 }
 
 impl ShellState {
@@ -29,18 +30,32 @@ impl ShellState {
             ketos_interp: Interpreter::new(),
             builtins: HashMap::new()
         };
-        s.builtins.insert(String::from("cd"), Box::new(|args: &[String], _| -> i32 {
+        s.builtins.insert(String::from("cd"), Box::new(|args: &[String]| -> i8 {
             if let Some(first) = args.first() {
                 let p = PathBuf::from(first);
                 if p.exists() && p.is_dir() {
-                    env::set_current_dir(p);
-                    0
+                    match env::set_current_dir(p) {
+                        Ok(_) => 0,
+                        Err(_) => -1,
+                    }
                 } else {
                     1
                 }
             } else {
                 1
             }
+        }));
+        s.builtins.insert(String::from("echo"), Box::new(|args: &[String]| -> i8 {
+            println!("{}", args.join(" "));
+            0
+        }));
+        s.builtins.insert(String::from("echo-stderr"), Box::new(|args: &[String]| -> i8 {
+            eprintln!("{}", args.join(" "));
+            0
+        }));
+        s.builtins.insert(String::from("exit"), Box::new(|_args: &[String]| -> i8 {
+            process::exit(0);
+            0
         }));
         s
     }
@@ -84,10 +99,10 @@ impl readline::delegate::Delegate for ShellState {
 }
 
 impl jobs::BuiltinHandler for ShellState {
-    fn handle_builtin(&mut self, name: &str, args: &[String], fd_options: &HashMap<u32, jobs::FdOptions>) -> i32 {
+    fn handle_builtin(&mut self, name: &str, args: &[String]) -> i8 {
         if let Some(b) = self.builtins.get_mut(name) {
             let func = Box::deref_mut(b);
-            func(args, fd_options)
+            func(args)
         } else {
             let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
             if let Some(value) = self.ketos_interp.scope().get_value(ketos_name) {
