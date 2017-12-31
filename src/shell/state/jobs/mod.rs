@@ -3,6 +3,7 @@ use nix;
 use std::ffi::CString;
 use super::super::syntax::ast::{Expr, Argument};
 use super::super::syntax::tokens::StringLiteralComponent;
+use super::ShellState;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::path::PathBuf;
@@ -44,13 +45,18 @@ pub enum Error {
 #[derive(Debug)]
 pub struct Job {
     status: Status,
-    output: Option<String>,
+    pub output: Option<String>,
     configuration: Configuration,
-    background: bool
+    pub background: bool
+}
+
+pub trait BuiltinHandler {
+    fn handle_builtin(&mut self, name: &str, args: &[String], fd_options: &HashMap<u32, FdOptions>) -> i32;
+    fn is_builtin(&mut self, name: &str) -> bool;
 }
 
 impl Job {
-    pub fn from_expr<F>(expr: &Expr, is_builtin: &F) -> Result<Job, Error> where F: (Fn(&str) -> bool) {
+    pub fn from_expr<B: BuiltinHandler>(expr: &Expr, builtin_handler: &mut B) -> Result<Job, Error> {
         match expr {
             &Expr::Command(binary, ref arguments) => {
                 let mut fd_options = HashMap::<u32, FdOptions>::new();
@@ -66,9 +72,9 @@ impl Job {
                         &Argument::Input(fd, path) => { fd_options.insert(fd, FdOptions::Input(PathBuf::from(join_components(path)))); },
                         &Argument::Background => { background = true; },
                         &Argument::Subshell(ref subexpr) => {
-                            match Job::from_expr(&subexpr, is_builtin) {
+                            match Job::from_expr(&subexpr, builtin_handler) {
                                 Ok(mut subjob) => {
-                                    match subjob.run_with_output() {
+                                    match subjob.run_with_output(builtin_handler) {
                                         Ok(output) => {
                                             str_arguments.push(output);
                                         }
@@ -88,7 +94,7 @@ impl Job {
                     };
                 }
                 let binary_str = join_components(binary);
-                if is_builtin(&binary_str) {
+                if builtin_handler.is_builtin(&binary_str) {
                     Ok(Job {
                         status: Status::NotStarted,
                         output: None,
@@ -120,8 +126,8 @@ impl Job {
                 }
             },
             &Expr::Pipeline(ref first, ref second) => {
-                let first_result = Job::from_expr(&first, is_builtin);
-                let second_result = Job::from_expr(&second, is_builtin);
+                let first_result = Job::from_expr(&first, builtin_handler);
+                let second_result = Job::from_expr(&second, builtin_handler);
                 if let Ok(f) = first_result {
                     if let Ok(s) = second_result {
                         Ok(Job {
@@ -172,22 +178,22 @@ impl Job {
         //nix::sys::wait::waitpid(self.pid, None);
     }
 
-    pub fn run(&mut self) -> Result<Status, Error> {
+    pub fn run<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<Status, Error> {
         println!("{:?}", self);
-        self.run_with_fd(None, None)
+        self.run_with_fd(None, None, handler)
     }
 
-    pub fn run_with_output(&mut self) -> Result<String, Error> {
+    pub fn run_with_output<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<String, Error> {
         Ok(String::from(""))
     }
 
-    fn run_with_fd(&mut self, input_fd: Option<u32>, output_fd: Option<u32>) -> Result<Status, Error> {
-        /*
+    fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<u32>, output_fd: Option<u32>, handler: &mut B) -> Result<Status, Error> {
         match self.configuration {
-            Configuration::Command(binary, arguments, fd_options) => {
-
+            Configuration::Builtin(ref name, ref args, ref options) => {
+                handler.handle_builtin(&name, &args, &options);
             }
-    }*/
+            _ => {}
+        }
         Ok(Status::Running(0))
     }
 }

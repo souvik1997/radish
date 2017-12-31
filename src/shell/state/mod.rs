@@ -11,22 +11,25 @@ use std::cell::Cell;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::ops::DerefMut;
 
 
 pub struct ShellState {
-    jobs: Vec<jobs::Job>,
+    background_jobs: Vec<jobs::Job>,
+    current_job: Option<Rc<jobs::Job>>,
     pub ketos_interp: Interpreter,
-    builtins: HashMap<String, Rc<(FnMut(&[&str], &HashMap<u32, jobs::FdOptions>) -> i32)>>
+    builtins: HashMap<String, Box<(FnMut(&[String], &HashMap<u32, jobs::FdOptions>) -> i32)>>
 }
 
 impl ShellState {
     pub fn new() -> Self {
         let mut s = ShellState {
-            jobs: Vec::<jobs::Job>::new(),
+            background_jobs: Vec::<jobs::Job>::new(),
+            current_job: None,
             ketos_interp: Interpreter::new(),
             builtins: HashMap::new()
         };
-        s.builtins.insert(String::from("cd"), Rc::new(|args: &[&str], _| -> i32 {
+        s.builtins.insert(String::from("cd"), Box::new(|args: &[String], _| -> i32 {
             if let Some(first) = args.first() {
                 let p = PathBuf::from(first);
                 if p.exists() && p.is_dir() {
@@ -42,22 +45,18 @@ impl ShellState {
         s
     }
 
-    pub fn new_job<'a>(&'a mut self, expr: &Expr) -> Result<&'a jobs::Job, jobs::Error>{
-        match jobs::Job::from_expr(&expr, &|name| {
-            let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
-            if let Some(_) = self.ketos_interp.scope().get_value(ketos_name) {
-                true
-            } else {
-                self.builtins.contains_key(name)
-            }
-        }) {
-            Ok(job) => {
-                self.jobs.push(job);
-                Ok(self.jobs.last().unwrap())
+    pub fn run_job(&mut self, expr: &Expr) -> Result<Rc<jobs::Job>, jobs::Error> {
+        match jobs::Job::from_expr(&expr, self) {
+            Ok(mut job) => {
+                job.run(self);
+                let result = Rc::new(job);
+                self.current_job = Some(result.clone());
+                Ok(result)
             },
             Err(e) => Err(e)
         }
     }
+
     pub fn readline(&mut self) -> readline::Result<String> {
         readline::Editor::new().readline(self)
     }
@@ -81,5 +80,25 @@ impl readline::delegate::Delegate for ShellState {
                              username=Colour::Red.normal().paint(username).to_string(),
                              cwd=Colour::Green.normal().paint(cwd).to_string(),
                              last_character=last_character))
+    }
+}
+
+impl jobs::BuiltinHandler for ShellState {
+    fn handle_builtin(&mut self, name: &str, args: &[String], fd_options: &HashMap<u32, jobs::FdOptions>) -> i32 {
+        if let Some(b) = self.builtins.get_mut(name) {
+            let func = Box::deref_mut(b);
+            func(args, fd_options)
+        } else {
+            -1
+        }
+    }
+
+    fn is_builtin(&mut self, name: &str) -> bool {
+        let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
+        if let Some(_) = self.ketos_interp.scope().get_value(ketos_name) {
+            true
+        } else {
+            self.builtins.contains_key(name)
+        }
     }
 }

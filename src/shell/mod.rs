@@ -36,7 +36,7 @@ impl Shell {
                                     println!("lexed: {:?}", tokens);
                                     match syntax::parser::parse(&tokens) {
                                         Ok(expr) => {
-                                            match state.new_job(&expr) {
+                                            match state.run_job(&expr) {
                                                 Ok(mut job) => {
                                                     println!("job: {:?}", job);
                                                 },
