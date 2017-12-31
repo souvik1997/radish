@@ -56,7 +56,7 @@ named!(subshell_operator<&str, Token>,
 named!(input_operator<&str, Token>,
        do_parse!(
            i: opt_res!(map_res!(digit, FromStr::from_str)) >>
-               tag!("<") >> (Token::Input(i.unwrap_or(1)))
+               tag!("<") >> (Token::Input(i.unwrap_or(0)))
        )
 );
 
