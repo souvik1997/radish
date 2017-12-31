@@ -824,11 +824,10 @@ fn reverse_incremental_search<R: RawReader>(rdr: &mut R,
 /// (e.g., C-c will exit readline)
 #[allow(let_unit_value)]
 fn readline_edit<C: Delegate>(prompt: &str,
-                               editor: &mut Editor<C>,
-                               original_mode: self::tty::Mode)
+                              editor: &mut Editor,
+                              original_mode: self::tty::Mode,
+                              delegate: &C)
                                -> Result<String> {
-    let delegate = &editor.delegate;
-
     let mut stdout = editor.term.create_writer();
 
     editor.kill_ring.reset();
@@ -1072,10 +1071,10 @@ impl Drop for Guard {
 
 /// Readline method that will enable RAW mode, call the `readline_edit()`
 /// method and disable raw mode
-fn readline_raw<C: Delegate>(prompt: &str, editor: &mut Editor<C>) -> Result<String> {
+fn readline_raw<C: Delegate>(prompt: &str, editor: &mut Editor, delegate: &C) -> Result<String> {
     let original_mode = try!(editor.term.enable_raw_mode());
     let guard = Guard(original_mode);
-    let user_input = readline_edit(prompt, editor, original_mode);
+    let user_input = readline_edit(prompt, editor, original_mode, delegate);
     drop(guard); // try!(disable_raw_mode(original_mode));
     println!("");
     user_input
@@ -1091,26 +1090,24 @@ fn readline_direct() -> Result<String> {
 }
 
 /// Line editor
-pub struct Editor<C: Delegate> {
+pub struct Editor {
     term: Terminal,
     history: History,
-    delegate: C,
     kill_ring: KillRing,
     config: Config,
     custom_bindings: Rc<RefCell<HashMap<KeyPress, Cmd>>>,
 }
 
-impl<C: Delegate> Editor<C> {
-    pub fn new(delegate: C) -> Editor<C> {
-        Self::with_config(Config::default(), delegate)
+impl Editor {
+    pub fn new() -> Editor {
+        Self::with_config(Config::default())
     }
 
-    pub fn with_config(config: Config, delegate: C) -> Editor<C> {
+    pub fn with_config(config: Config) -> Editor {
         let term = Terminal::new();
         Editor {
             term: term,
             history: History::with_config(config),
-            delegate: delegate,
             kill_ring: KillRing::new(60),
             config: config,
             custom_bindings: Rc::new(RefCell::new(HashMap::new())),
@@ -1118,12 +1115,12 @@ impl<C: Delegate> Editor<C> {
     }
 
     /// This method will read a line from STDIN and will display a `prompt`
-    pub fn readline(&mut self) -> Result<String> {
+    pub fn readline<C: Delegate>(&mut self, delegate: &C) -> Result<String> {
         if self.term.is_unsupported() {
             debug!(target: "rustyline", "unsupported terminal");
             // Write prompt and flush it to stdout
             let mut stdout = io::stdout();
-            let prompt = self.delegate.prompt(false);
+            let prompt = delegate.prompt(false);
             try!(write_and_flush(&mut stdout, prompt.as_bytes()));
 
             readline_direct()
@@ -1132,7 +1129,7 @@ impl<C: Delegate> Editor<C> {
             // Not a tty: read from file / pipe.
             readline_direct()
         } else {
-            readline_raw(&self.delegate.prompt(true), self)
+            readline_raw(&delegate.prompt(true), self, delegate)
         }
     }
 
@@ -1184,15 +1181,15 @@ impl<C: Delegate> Editor<C> {
     ///     }
     /// }
     /// ```
-    pub fn iter<'a>(&'a mut self, prompt: &'a str) -> Iter<C> {
+    pub fn iter<'a, C: Delegate>(&'a mut self, delegate: &'a C) -> Iter<C> {
         Iter {
             editor: self,
-            prompt: prompt,
+            delegate: delegate
         }
     }
 }
 
-impl<C: Delegate> fmt::Debug for Editor<C> {
+impl fmt::Debug for Editor {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Editor")
             .field("term", &self.term)
@@ -1204,15 +1201,15 @@ impl<C: Delegate> fmt::Debug for Editor<C> {
 pub struct Iter<'a, C: Delegate>
     where C: 'a
 {
-    editor: &'a mut Editor<C>,
-    prompt: &'a str,
+    editor: &'a mut Editor,
+    delegate: &'a C,
 }
 
 impl<'a, C: Delegate> Iterator for Iter<'a, C> {
     type Item = Result<String>;
 
     fn next(&mut self) -> Option<Result<String>> {
-        let readline = self.editor.readline();
+        let readline = self.editor.readline(self.delegate);
         match readline {
             Ok(l) => {
                 self.editor.add_history_entry(l.as_ref()); // TODO Validate

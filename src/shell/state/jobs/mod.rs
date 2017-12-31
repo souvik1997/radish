@@ -1,25 +1,38 @@
 use std::process;
 use nix;
 use std::ffi::CString;
-use super::syntax::ast::{Expr, Argument};
-use super::syntax::tokens::StringLiteralComponent;
+use super::super::syntax::ast::{Expr, Argument};
+use super::super::syntax::tokens::StringLiteralComponent;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::path::PathBuf;
 use std::env;
+use std::fmt;
 
 #[derive(Debug)]
-enum FdOptions {
+pub enum FdOptions {
     Append(PathBuf),
     Overwrite(PathBuf),
     Input(PathBuf),
     Fd(u32),
 }
 
+pub struct BuiltinFunction<'a> {
+    function: &'a FnMut(&[&str], &HashMap<u32, FdOptions>) -> i32,
+    name: String
+}
+
+impl<'a> fmt::Debug for BuiltinFunction<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "builtin function {}", self.name)
+    }
+}
+
 #[derive(Debug)]
-enum Configuration {
-    Command(String, Vec<String>, HashMap<u32, FdOptions>),
-    Pipeline(Rc<Job>, Rc<Job>)
+pub enum Configuration<'a> {
+    Command(PathBuf, Vec<String>, HashMap<u32, FdOptions>),
+    Builtin(BuiltinFunction<'a>, Vec<String>, HashMap<u32, FdOptions>),
+    Pipeline(Rc<Job<'a>>, Rc<Job<'a>>)
 }
 
 #[derive(Debug)]
@@ -33,19 +46,22 @@ pub enum Status {
 pub enum Error {
     Fork,
     Subshell(Rc<Error>),
-    NotFoundInPath,
+    CommandNotFound(PathBuf),
+    CorruptPath,
+    LeftPipe(Rc<Error>),
+    RightPipe(Rc<Error>),
 }
 
 #[derive(Debug)]
-pub struct Job {
+pub struct Job<'a> {
     status: Status,
     output: Option<String>,
-    configuration: Configuration,
+    configuration: Configuration<'a>,
     background: bool
 }
 
-impl Job {
-    pub fn new(expr: &Expr) -> Result<Job, Error> {
+impl<'a> Job<'a> {
+    pub fn from_expr<F>(expr: &Expr, builtins: &F) -> Result<Job<'a>, Error> where F: (Fn(&str) -> (Option<&'a (FnMut(&[&str], &HashMap<u32, FdOptions>) -> i32)>)) {
         match expr {
             &Expr::Command(binary, ref arguments) => {
                 let mut fd_options = HashMap::<u32, FdOptions>::new();
@@ -61,7 +77,7 @@ impl Job {
                         &Argument::Input(fd, path) => { fd_options.insert(fd, FdOptions::Input(PathBuf::from(join_components(path)))); },
                         &Argument::Background => { background = true; },
                         &Argument::Subshell(ref subexpr) => {
-                            match Job::new(&subexpr) {
+                            match Job::from_expr(&subexpr, builtins) {
                                 Ok(mut subjob) => {
                                     match subjob.run_with_output() {
                                         Ok(output) => {
@@ -82,16 +98,44 @@ impl Job {
                         }
                     };
                 }
-                Ok(Job {
-                    status: Status::NotStarted,
-                    output: None,
-                    configuration: Configuration::Command(String::from(join_components(binary)), str_arguments, fd_options),
-                    background: background
-                })
+                let binary_str = join_components(binary);
+                let binary_path = PathBuf::from(&binary_str);
+                if let Some(path_os_str) = env::var_os("PATH") {
+                    if let Some(builtin) = builtins(&binary_str) {
+                        Ok(Job {
+                            status: Status::NotStarted,
+                            output: None,
+                            configuration: Configuration::Builtin(BuiltinFunction {
+                                function: builtin,
+                                name: binary_str,
+                            }, str_arguments, fd_options),
+                            background: background
+                        })
+                    } else if let Some(binary_appended_path) = env::split_paths(&path_os_str).filter_map(|mut f| {
+                        f.push(&binary_path);
+                        let appended_path = f.as_path();
+                        if appended_path.exists() && appended_path.is_file() {
+                            Some(appended_path.to_path_buf())
+                        } else {
+                            None
+                        }
+                    }).next() {
+                        Ok(Job {
+                            status: Status::NotStarted,
+                            output: None,
+                            configuration: Configuration::Command(binary_appended_path, str_arguments, fd_options),
+                            background: background
+                        })
+                    } else {
+                        Err(Error::CommandNotFound(binary_path))
+                    }
+                } else {
+                    Err(Error::CorruptPath)
+                }
             },
             &Expr::Pipeline(ref first, ref second) => {
-                let first_result = Job::new(&first);
-                let second_result = Job::new(&second);
+                let first_result = Job::from_expr(&first, builtins);
+                let second_result = Job::from_expr(&second, builtins);
                 if let Ok(f) = first_result {
                     if let Ok(s) = second_result {
                         Ok(Job {
@@ -101,12 +145,11 @@ impl Job {
                             background: false
                         })
                     } else {
-                        second_result
+                        Err(Error::RightPipe(Rc::new(second_result.unwrap_err())))
                     }
                 } else {
-                    first_result
+                    Err(Error::LeftPipe(Rc::new(first_result.unwrap_err())))
                 }
-
             }
         }
         /*
