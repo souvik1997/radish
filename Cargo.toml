@@ -13,6 +13,8 @@ log = "^0.3.8"
 nom = "^3.2"
 users = "^0.6.0"
 ansi_term = "0.9"
+ketos = "^0.10"
+ketos_derive = "^0.10"
 
  [dev-dependencies]
  tempdir = "0.3.4"
