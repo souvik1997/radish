@@ -28,12 +28,22 @@ impl Shell {
             match input {
                 Ok(command) => {
                     println!("Got command {}", command);
-                    if let nom::IResult::Done(_, tokens) = syntax::lexer::lex(&command) {
-                        println!("lexed: {:?}", tokens);
-                        if let Some(expr) = syntax::parser::parse(&tokens) {
-                            self.evaluate(&expr);
+                    let trimmed = command.trim();
+                    if trimmed.starts_with("(") {
+                        match self.state.ketos_interp.run_code(trimmed, None) {
+                            Ok(value) => self.state.ketos_interp.display_value(&value),
+                            Err(error) => println!("error: {}", error)
+                        }
+                    } else {
+                        if let nom::IResult::Done(_, tokens) = syntax::lexer::lex(&command) {
+                            println!("lexed: {:?}", tokens);
+                            if let Some(expr) = syntax::parser::parse(&tokens) {
+                                self.evaluate(&expr);
+                            }
                         }
                     }
+
+
                 }
                 Err(_) => {
                     println!("Error when reading input!");

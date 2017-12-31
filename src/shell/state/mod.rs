@@ -4,16 +4,20 @@ use std::env;
 extern crate users;
 extern crate ansi_term;
 use self::ansi_term::Colour;
+extern crate ketos;
+use ketos::Interpreter;
 
 
 pub struct ShellState {
     jobs: Vec<Job>,
+    pub ketos_interp: Interpreter,
 }
 
 impl ShellState {
     pub fn new() -> Self {
         ShellState {
-            jobs: Vec::<Job>::new()
+            jobs: Vec::<Job>::new(),
+            ketos_interp: Interpreter::new()
         }
     }
 }
