@@ -6,18 +6,18 @@ use nom;
 use std::rc::Rc;
 use std::cell::Cell;
 
-pub struct Shell<'a> {
-    state: ShellState<'a>
+pub struct Shell {
+    state: ShellState
 }
 
-impl<'a> Shell<'a> {
+impl Shell {
     pub fn new() -> Self {
         Shell {
             state: ShellState::new()
         }
     }
 
-    pub fn run_interactive(&'a mut self) {
+    pub fn run_interactive(&mut self) {
         let state = &mut self.state;
         loop {
             let input = state.readline();

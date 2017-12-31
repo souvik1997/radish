@@ -17,22 +17,11 @@ pub enum FdOptions {
     Fd(u32),
 }
 
-pub struct BuiltinFunction<'a> {
-    function: &'a FnMut(&[&str], &HashMap<u32, FdOptions>) -> i32,
-    name: String
-}
-
-impl<'a> fmt::Debug for BuiltinFunction<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "builtin function {}", self.name)
-    }
-}
-
 #[derive(Debug)]
-pub enum Configuration<'a> {
+pub enum Configuration {
     Command(PathBuf, Vec<String>, HashMap<u32, FdOptions>),
-    Builtin(BuiltinFunction<'a>, Vec<String>, HashMap<u32, FdOptions>),
-    Pipeline(Rc<Job<'a>>, Rc<Job<'a>>)
+    Builtin(String, Vec<String>, HashMap<u32, FdOptions>),
+    Pipeline(Rc<Job>, Rc<Job>)
 }
 
 #[derive(Debug)]
@@ -53,15 +42,15 @@ pub enum Error {
 }
 
 #[derive(Debug)]
-pub struct Job<'a> {
+pub struct Job {
     status: Status,
     output: Option<String>,
-    configuration: Configuration<'a>,
+    configuration: Configuration,
     background: bool
 }
 
-impl<'a> Job<'a> {
-    pub fn from_expr<F>(expr: &Expr, builtins: &F) -> Result<Job<'a>, Error> where F: (Fn(&str) -> (Option<&'a (FnMut(&[&str], &HashMap<u32, FdOptions>) -> i32)>)) {
+impl Job {
+    pub fn from_expr<F>(expr: &Expr, is_builtin: &F) -> Result<Job, Error> where F: (Fn(&str) -> bool) {
         match expr {
             &Expr::Command(binary, ref arguments) => {
                 let mut fd_options = HashMap::<u32, FdOptions>::new();
@@ -77,7 +66,7 @@ impl<'a> Job<'a> {
                         &Argument::Input(fd, path) => { fd_options.insert(fd, FdOptions::Input(PathBuf::from(join_components(path)))); },
                         &Argument::Background => { background = true; },
                         &Argument::Subshell(ref subexpr) => {
-                            match Job::from_expr(&subexpr, builtins) {
+                            match Job::from_expr(&subexpr, is_builtin) {
                                 Ok(mut subjob) => {
                                     match subjob.run_with_output() {
                                         Ok(output) => {
@@ -99,19 +88,16 @@ impl<'a> Job<'a> {
                     };
                 }
                 let binary_str = join_components(binary);
-                let binary_path = PathBuf::from(&binary_str);
-                if let Some(path_os_str) = env::var_os("PATH") {
-                    if let Some(builtin) = builtins(&binary_str) {
-                        Ok(Job {
-                            status: Status::NotStarted,
-                            output: None,
-                            configuration: Configuration::Builtin(BuiltinFunction {
-                                function: builtin,
-                                name: binary_str,
-                            }, str_arguments, fd_options),
-                            background: background
-                        })
-                    } else if let Some(binary_appended_path) = env::split_paths(&path_os_str).filter_map(|mut f| {
+                if is_builtin(&binary_str) {
+                    Ok(Job {
+                        status: Status::NotStarted,
+                        output: None,
+                        configuration: Configuration::Builtin(binary_str, str_arguments, fd_options),
+                        background: background
+                    })
+                } else if let Some(path_os_str) = env::var_os("PATH") {
+                    let binary_path = PathBuf::from(&binary_str);
+                    if let Some(binary_appended_path) = env::split_paths(&path_os_str).filter_map(|mut f| {
                         f.push(&binary_path);
                         let appended_path = f.as_path();
                         if appended_path.exists() && appended_path.is_file() {
@@ -134,8 +120,8 @@ impl<'a> Job<'a> {
                 }
             },
             &Expr::Pipeline(ref first, ref second) => {
-                let first_result = Job::from_expr(&first, builtins);
-                let second_result = Job::from_expr(&second, builtins);
+                let first_result = Job::from_expr(&first, is_builtin);
+                let second_result = Job::from_expr(&second, is_builtin);
                 if let Ok(f) = first_result {
                     if let Ok(s) = second_result {
                         Ok(Job {

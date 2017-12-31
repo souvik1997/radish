@@ -13,13 +13,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 
-pub struct ShellState<'a> {
-    jobs: Vec<jobs::Job<'a>>,
+pub struct ShellState {
+    jobs: Vec<jobs::Job>,
     pub ketos_interp: Interpreter,
     builtins: HashMap<String, Rc<(FnMut(&[&str], &HashMap<u32, jobs::FdOptions>) -> i32)>>
 }
 
-impl<'a> ShellState<'a> {
+impl ShellState {
     pub fn new() -> Self {
         let mut s = ShellState {
             jobs: Vec::<jobs::Job>::new(),
@@ -42,17 +42,18 @@ impl<'a> ShellState<'a> {
         s
     }
 
-    pub fn new_job(&mut self, expr: &Expr) -> Result<jobs::Job, jobs::Error>{
-        let builtins = &self.builtins;
+    pub fn new_job<'a>(&'a mut self, expr: &Expr) -> Result<&'a jobs::Job, jobs::Error>{
         match jobs::Job::from_expr(&expr, &|name| {
-            if let Some(b) = builtins.get(name) {
-                Some(b.as_ref())
+            let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
+            if let Some(_) = self.ketos_interp.scope().get_value(ketos_name) {
+                true
             } else {
-                None
+                self.builtins.contains_key(name)
             }
         }) {
             Ok(job) => {
-                Ok(job)
+                self.jobs.push(job);
+                Ok(self.jobs.last().unwrap())
             },
             Err(e) => Err(e)
         }
@@ -62,7 +63,7 @@ impl<'a> ShellState<'a> {
     }
 }
 
-impl<'a> readline::delegate::Delegate for ShellState<'a> {
+impl readline::delegate::Delegate for ShellState {
     fn complete(&self, _line: &str, _pos: usize) -> readline::Result<(usize, Vec<String>)> {
         Ok((0, Vec::new()))
     }
