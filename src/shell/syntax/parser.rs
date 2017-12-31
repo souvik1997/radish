@@ -4,7 +4,16 @@ use super::ast::*;
 use std::str::FromStr;
 use std::rc::Rc;
 
-fn parse_one<'a>(t: &'a [Token]) -> Option<Expr<'a>> {
+#[derive(Debug)]
+pub enum Error {
+    PipeConstruction,
+    SubshellMatch,
+    Subshell(Rc<Error>),
+    ExpectedPath,
+    ExpectedCommandName
+}
+
+fn parse_one<'a>(t: &'a [Token]) -> Result<Expr<'a>, Error> {
     let mut arguments: Vec<Argument> = Vec::new();
     let mut iter = t.iter().enumerate();
     let binary: Option<&'a [StringLiteralComponent<'a>]> = {
@@ -18,43 +27,52 @@ fn parse_one<'a>(t: &'a [Token]) -> Option<Expr<'a>> {
         match token {
             &Token::StringLiteral(ref s) => arguments.push(Argument::Literal(s)),
             &Token::Pipe => {
-                if let Some(left) = parse_one(&t[0..index]) {
-                    if let Some(right) = parse_one(&t[index+1..t.len()]) {
-                        return Some(Expr::Pipeline(Rc::new(left), Rc::new(right)))
+                if let Ok(left) = parse_one(&t[0..index]) {
+                    if let Ok(right) = parse_one(&t[index+1..t.len()]) {
+                        return Ok(Expr::Pipeline(Rc::new(left), Rc::new(right)))
                     } else {
-                        return None;
+                        return Err(Error::PipeConstruction);
                     }
                 } else {
-                    return None;
+                    return Err(Error::PipeConstruction);
                 }
             },
             &Token::Subshell => {
                 iter.next();
-                if let Some((next_index, _)) = iter.find(|&(_, tk)| {
+                if let Some(next_index_reversed) = t.iter().rev().position(|tk| {
                     tk == &Token::Subshell
                 }) {
-                    if let Some(inner) = parse_one(&t[index+1..next_index]) {
-                        arguments.push(Argument::Subshell(Rc::new(inner)));
-                    } else {
-                        return None;
+                    let next_index = t.len() - next_index_reversed - 1;
+                    let inner_result = parse_one(&t[index+1..next_index]);
+                    match inner_result {
+                        Ok(inner) => {
+                            arguments.push(Argument::Subshell(Rc::new(inner)));
+                            while let Some(adv) = iter.next() {
+                                if adv.0 >= next_index {
+                                    break;
+                                }
+                            }
+                        },
+                        Err(error) => {
+                            return Err(Error::Subshell(Rc::new(error)));
+                        }
                     }
                 } else {
-                    return None;
+                    return Err(Error::SubshellMatch);
                 }
-
             },
             &Token::Redirect(fd) => {
                 if let Some((_, &Token::StringLiteral(ref target))) = iter.next() {
                     arguments.push(Argument::Redirect(fd, target));
                 } else {
-                    return None;
+                    return Err(Error::ExpectedPath);
                 }
             },
             &Token::Append(fd) => {
                 if let Some((_, &Token::StringLiteral(ref target))) = iter.next() {
                     arguments.push(Argument::Append(fd, target));
                 } else {
-                    return None;
+                    return Err(Error::ExpectedPath);
                 }
             },
             &Token::RedirectAll => {
@@ -62,7 +80,7 @@ fn parse_one<'a>(t: &'a [Token]) -> Option<Expr<'a>> {
                     arguments.push(Argument::Redirect(1, target));
                     arguments.push(Argument::Redirect(2, target));
                 } else {
-                    return None;
+                    return Err(Error::ExpectedPath);
                 }
             },
             &Token::AppendAll => {
@@ -70,14 +88,14 @@ fn parse_one<'a>(t: &'a [Token]) -> Option<Expr<'a>> {
                     arguments.push(Argument::Append(1, target));
                     arguments.push(Argument::Append(2, target));
                 } else {
-                    return None;
+                    return Err(Error::ExpectedPath);
                 }
             },
             &Token::Input(fd) => {
                 if let Some((_, &Token::StringLiteral(ref target))) = iter.next() {
                     arguments.push(Argument::Input(fd, target));
                 } else {
-                    return None;
+                    return Err(Error::ExpectedPath);
                 }
             },
             &Token::RedirectFD(fd1, fd2) => {
@@ -89,12 +107,12 @@ fn parse_one<'a>(t: &'a [Token]) -> Option<Expr<'a>> {
         }
     }
     if let Some(b) = binary {
-        Some(Expr::Command(b, arguments))
+        Ok(Expr::Command(b, arguments))
     } else {
-        None
+        Err(Error::ExpectedCommandName)
     }
 }
 
-pub fn parse<'a>(t: &'a [Token]) -> Option<Expr<'a>> {
+pub fn parse<'a>(t: &'a [Token]) -> Result<Expr<'a>, Error> {
     parse_one(t)
 }

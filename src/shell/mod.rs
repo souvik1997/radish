@@ -27,7 +27,6 @@ impl Shell {
             let input = self.readline.readline();
             match input {
                 Ok(command) => {
-                    println!("Got command {}", command);
                     let trimmed = command.trim();
                     if trimmed.starts_with("(") {
                         match self.state.ketos_interp.run_code(trimmed, None) {
@@ -35,20 +34,37 @@ impl Shell {
                             Err(error) => println!("error: {}", error)
                         }
                     } else {
-                        if let nom::IResult::Done(_, tokens) = syntax::lexer::lex(&command) {
-                            println!("lexed: {:?}", tokens);
-                            if let Some(expr) = syntax::parser::parse(&tokens) {
-                                if let Ok(mut job) = jobs::Job::new(&expr) {
-                                    job.run();
+                        match syntax::lexer::lex(&command) {
+                            nom::IResult::Done(remaining, tokens) =>  {
+                                if remaining.len() == 0 {
+                                    println!("lexed: {:?}", tokens);
+                                    match syntax::parser::parse(&tokens) {
+                                        Ok(expr) => {
+                                            if let Ok(mut job) = jobs::Job::new(&expr) {
+                                                job.run();
+                                            } else {
+                                                println!("error when constructing job");
+                                            }
+                                        },
+                                        Err(error) => {
+                                            println!("syntax error: {:?}", error);
+                                        }
+                                    }
                                 } else {
-                                    println!("error when constructing job");
+                                    println!("syntax error: extraneous characters `{}`", remaining);
                                 }
-
+                            },
+                            nom::IResult::Error(error) => {
+                                println!("lex error: {:?}", error);
+                            },
+                            nom::IResult::Incomplete(nom::Needed::Unknown) => {
+                                println!("lex error: incomplete input");
+                            },
+                            nom::IResult::Incomplete(nom::Needed::Size(remaining)) => {
+                                println!("lex error: incomplete input, remaining: {}", remaining);
                             }
                         }
                     }
-
-
                 }
                 Err(_) => {
                     println!("Error when reading input!");

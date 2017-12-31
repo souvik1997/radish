@@ -31,8 +31,9 @@ pub enum Status {
 
 #[derive(Debug)]
 pub enum Error {
-    ForkError,
-    SubshellError,
+    Fork,
+    Subshell(Rc<Error>),
+    NotFoundInPath,
 }
 
 #[derive(Debug)]
@@ -67,12 +68,12 @@ impl Job {
                                             str_arguments.push(output);
                                         }
                                         Err(error) => {
-                                            return Err(error);
+                                            return Err(Error::Subshell(Rc::new(error)));
                                         }
                                     }
                                 },
                                 Err(error) => {
-                                    return Err(error);
+                                    return Err(Error::Subshell(Rc::new(error)));
                                 }
                             }
                         },
