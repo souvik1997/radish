@@ -3,8 +3,7 @@ mod syntax;
 mod state;
 use self::state::ShellState;
 use nom;
-use std::rc::Rc;
-use std::cell::Cell;
+use std::process;
 
 pub struct Shell {
     state: ShellState
@@ -70,6 +69,7 @@ impl Shell {
                 }
                 Err(error) => {
                     println!("error while reading input: {:?}", error);
+                    process::exit(-1);
                 }
             }
         }

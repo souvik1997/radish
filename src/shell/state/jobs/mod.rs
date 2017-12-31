@@ -11,6 +11,7 @@ use std::env;
 use std::fmt;
 use std::cell::Cell;
 use std::os::unix::io::RawFd;
+use std::fs;
 
 #[derive(Debug)]
 pub enum FdOption {
@@ -24,7 +25,7 @@ pub enum FdOption {
 pub enum Configuration {
     Command(PathBuf, Vec<String>, HashMap<RawFd, FdOption>),
     Builtin(String, Vec<String>, HashMap<RawFd, FdOption>),
-    Pipeline(Rc<Job>, Rc<Job>)
+    Pipeline(Box<Job>, Box<Job>)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,6 +44,7 @@ pub enum Error {
     CorruptPath,
     LeftPipe(Rc<Error>),
     RightPipe(Rc<Error>),
+    Pipe,
 }
 
 #[derive(Debug)]
@@ -136,7 +138,7 @@ impl Job {
                         Ok(Job {
                             status: Cell::new(Status::NotStarted),
                             output: None,
-                            configuration: Configuration::Pipeline(Rc::new(f), Rc::new(s)),
+                            configuration: Configuration::Pipeline(Box::new(f), Box::new(s)),
                             background: false
                         })
                     } else {
@@ -211,26 +213,25 @@ impl Job {
                 second.wait(flags)
             }
         }
-        //nix::sys::wait::waitpid(self.pid, None);
     }
 
     pub fn run<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<Status, Error> {
         //println!("{:?}", self);
-        self.run_with_fd(None, None, handler)
+        self.run_with_fd(None, None, handler, &vec![])
     }
 
     pub fn run_with_output<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<String, Error> {
         Ok(String::from(""))
     }
 
-    fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<RawFd>, output_fd: Option<RawFd>, handler: &mut B) -> Result<Status, Error> {
+    fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<RawFd>, output_fd: Option<RawFd>, handler: &mut B, post_fork_close: &[RawFd]) -> Result<Status, Error> {
         use nix::fcntl::*;
         use nix::sys::stat::*;
-        fn apply_fd_changes(input_fd: Option<RawFd>, output_fd: Option<RawFd>, options: &HashMap<RawFd, FdOption>) -> (bool, Vec<(RawFd, RawFd)>) {
-            let mut log: Vec<(RawFd, RawFd)> = Vec::new();
+        fn apply_fd_changes(input_fd: Option<RawFd>, output_fd: Option<RawFd>, options: &HashMap<RawFd, FdOption>) -> (bool, Vec<(RawFd, RawFd, Option<RawFd>)>) {
+            let mut log: Vec<(RawFd, RawFd, Option<RawFd>)> = Vec::new();
             if let Some(input) = input_fd {
                 match nix::unistd::dup(0) {
-                    Ok(saved) => log.push((0, saved)),
+                    Ok(saved) => log.push((0, saved, None)),
                     Err(_) => return (false, log)
                 }
                 if let Err(_) = nix::unistd::dup2(input, 0) {
@@ -239,64 +240,97 @@ impl Job {
             }
             if let Some(output) = output_fd {
                 match nix::unistd::dup(1) {
-                    Ok(saved) => log.push((1, saved)),
+                    Ok(saved) => log.push((1, saved, None)),
                     Err(_) => return (false, log)
                 }
-                if let Err(_) = nix::unistd::dup2(output, 0) {
+                if let Err(_) = nix::unistd::dup2(output, 1) {
                     return (false, log);
                 }
             }
             for (src, opt) in options {
                 match nix::unistd::dup(*src) {
-                    Ok(saved) => log.push((*src, saved)),
-                    Err(_) => return (false, log)
-                }
-                match opt {
-                    &FdOption::Fd(dest) => {
-                        if let Err(_) = nix::unistd::dup2(dest, *src) {
-                            return (false, log)
-                        }
-                    },
-                    &FdOption::Append(ref path) => {
-                        match nix::fcntl::open(path, O_WRONLY | O_CREAT | O_APPEND, S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH) {
-                            Ok(newfd) => {
-                                if let Err(_) = nix::unistd::dup2(newfd, *src) {
+                    Ok(saved) => {
+                        match opt {
+                            &FdOption::Fd(dest) => {
+                                log.push((*src, saved, None));
+                                if let Err(_) = nix::unistd::dup2(dest, *src) {
                                     return (false, log)
                                 }
                             },
-                            Err(_) => return (false, log)
-                        }
-                    },
-                    &FdOption::Overwrite(ref path) => {
-                        match nix::fcntl::open(path, O_WRONLY | O_CREAT, S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH) {
-                            Ok(newfd) => {
-                                if let Err(_) = nix::unistd::dup2(newfd, *src) {
-                                    return (false, log)
+                            &FdOption::Append(ref path) => {
+                                match nix::fcntl::open(path, O_WRONLY | O_CREAT | O_APPEND, S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH) {
+                                    Ok(newfd) => {
+                                        log.push((*src, saved, Some(newfd)));
+                                        if let Err(_) = nix::unistd::dup2(newfd, *src) {
+                                            return (false, log);
+                                        }
+                                    },
+                                    Err(_) => {
+                                        log.push((*src, saved, None));
+                                        return (false, log)
+                                    }
                                 }
                             },
-                            Err(_) => return (false, log)
-                        }
-                    },
-                    &FdOption::Input(ref path) => {
-                        match nix::fcntl::open(path, O_RDONLY, S_IWUSR /* ignored */) {
-                            Ok(newfd) => {
-                                if let Err(_) = nix::unistd::dup2(newfd, *src) {
-                                    return (false, log)
+                            &FdOption::Overwrite(ref path) => {
+                                if path.exists() && path.is_file() {
+                                    match fs::remove_file(path) {
+                                        Ok(_) => {},
+                                        Err(_) => {
+                                            return (false, log)
+                                        }
+                                    }
+                                }
+                                match nix::fcntl::open(path, O_WRONLY | O_CREAT, S_IWUSR | S_IRUSR | S_IRGRP | S_IROTH) {
+                                    Ok(newfd) => {
+                                        log.push((*src, saved, Some(newfd)));
+                                        if let Err(_) = nix::unistd::dup2(newfd, *src) {
+                                            return (false, log);
+                                        }
+                                    },
+                                    Err(_) => {
+                                        log.push((*src, saved, None));
+                                        return (false, log);
+                                    }
                                 }
                             },
-                            Err(_) => return (false, log)
+                            &FdOption::Input(ref path) => {
+                                match nix::fcntl::open(path, O_RDONLY, S_IWUSR /* ignored */) {
+                                    Ok(newfd) => {
+                                        log.push((*src, saved, Some(newfd)));
+                                        if let Err(_) = nix::unistd::dup2(newfd, *src) {
+                                            return (false, log)
+                                        }
+                                    },
+                                    Err(_) => {
+                                        log.push((*src, saved, None));
+                                        return (false, log);
+                                    }
+                                }
+                            }
+
                         }
                     }
-
+                    Err(_) => return (false, log)
                 }
             }
             (true, log)
         }
 
-        fn reverse_fd_changes(log: &Vec<(RawFd, RawFd)>) {
-            log.iter().rev().for_each(|&(src, saved)| {
+        fn reverse_fd_changes(log: &Vec<(RawFd, RawFd, Option<RawFd>)>) {
+            log.iter().rev().for_each(|&(src, saved, newfd)| {
                 if let Err(_) = nix::unistd::dup2(saved, src) {
                     panic!("failed to revert file descriptors");
+                }
+
+                if let Err(_) = nix::unistd::close(saved) {
+                    panic!("failed to revert file descriptors");
+                }
+
+                if let Some(n) = newfd {
+                    if let Err(_) = nix::unistd::close(n) {
+                        panic!("failed to revert file descriptors");
+                    }
+
                 }
             });
         }
@@ -330,7 +364,12 @@ impl Job {
                                     Ok(self.status.get())
                                 },
                                 nix::unistd::ForkResult::Child => {
-                                    let (success, _) = apply_fd_changes(input_fd, output_fd, options);
+                                    let (mut success, _) = apply_fd_changes(input_fd, output_fd, options);
+                                    post_fork_close.into_iter().for_each(|fd| {
+                                        if nix::unistd::close(*fd).is_err() {
+                                            success = false;
+                                        }
+                                    });
                                     if success {
                                         match nix::unistd::execvp(&binary_cstring, &args_cstring) {
                                             _ => { process::exit(-1) }
@@ -349,7 +388,40 @@ impl Job {
                     Err(Error::StringEncoding)
                 }
             }
-            _ => { Err(Error::Fork) }
+            Configuration::Pipeline(ref mut first, ref mut second) => {
+                match nix::unistd::pipe() {
+                    Ok((output, input)) => {
+                        let result: Result<Status, Error>;
+                        let mut first_cleanup = Vec::from(post_fork_close);
+                        first_cleanup.push(output);
+                        match first.run_with_fd(input_fd, Some(input), handler, &first_cleanup) {
+                            Ok(_) => {
+                                let mut second_cleanup = Vec::from(post_fork_close);
+                                second_cleanup.push(input);
+                                match second.run_with_fd(Some(output), output_fd, handler, &second_cleanup) {
+                                    Ok(s) => {
+                                        result = Ok(s);
+                                    },
+                                    Err(e) => {
+                                        result = Err(Error::RightPipe(Rc::new(e)));
+                                    }
+                                };
+                            },
+                            Err(e) => {
+                                result = Err(Error::LeftPipe(Rc::new(e)));
+                            }
+                        };
+                        if nix::unistd::close(input).is_ok() && nix::unistd::close(output).is_ok() {
+                            result
+                        } else {
+                            Err(Error::Pipe)
+                        }
+                    },
+                    Err(_) => {
+                        Err(Error::Pipe)
+                    }
+                }
+            }
         }
     }
 }
