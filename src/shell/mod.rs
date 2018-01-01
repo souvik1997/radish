@@ -4,6 +4,7 @@ mod state;
 use self::state::ShellState;
 use nom;
 use std::process;
+use nix;
 
 pub struct Shell {
     state: ShellState
@@ -35,12 +36,9 @@ impl Shell {
                                     //println!("lexed: {:?}", tokens);
                                     match syntax::parser::parse(&tokens) {
                                         Ok(expr) => {
-                                            match state.run_job(&expr) {
-                                                Ok(ref mut job) => {
-                                                    match job.wait_until_complete() {
-                                                        Ok(_) => {},
-                                                        Err(error) => println!("error while running `{}`: {}", command, error)
-                                                    }
+                                            match state.enqueue_job(&expr) {
+                                                Ok(()) => {
+                                                    state.run_foreground_jobs();
                                                 },
                                                 Err(error) => {
                                                     println!("error when constructing job: {:?}", error);

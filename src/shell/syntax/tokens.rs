@@ -17,5 +17,6 @@ pub enum Token<'a> {
 #[derive(PartialEq, Debug, Clone)]
 pub enum StringLiteralComponent<'a> {
     Literal(&'a str),
-    EnvVar(&'a str)
+    EnvVar(&'a str),
+    Brace(Vec<&'a str>),
 }

@@ -35,8 +35,7 @@ pub enum Configuration {
 #[derive(Debug, Clone, Copy)]
 pub enum Status {
     NotStarted,
-    Running(nix::libc::pid_t),
-    Done(i8)
+    Started(nix::libc::pid_t, nix::sys::wait::WaitStatus),
 }
 
 #[derive(Debug)]
@@ -50,11 +49,12 @@ pub enum Error {
     LeftPipe(Rc<Error>),
     RightPipe(Rc<Error>),
     Pipe,
+    Wait,
 }
 
 #[derive(Debug)]
 pub struct Job {
-    status: Cell<Status>,
+    pub status: Cell<Status>,
     pub output: Option<String>,
     configuration: Configuration,
     pub background: bool
@@ -212,30 +212,48 @@ impl Job {
         */
     }
 
-    pub fn wait_until_complete(&self) -> nix::Result<nix::sys::wait::WaitStatus> {
-        self.wait(None)
+    pub fn running_status(&self, status: nix::sys::wait::WaitStatus) -> bool {
+        match status {
+            nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Stopped(_,_) | nix::sys::wait::WaitStatus::Continued(_) => { true },
+            _ => { false }
+        }
     }
 
-    fn wait(&self, flags: Option<nix::sys::wait::WaitPidFlag>) -> nix::Result<nix::sys::wait::WaitStatus> {
+    pub fn running(&self) -> bool {
+        match self.status.get() {
+            Status::NotStarted => { false },
+            Status::Started(_, s) => { self.running_status(s) }
+        }
+    }
+
+    pub fn wait(&self, flags: Option<nix::sys::wait::WaitPidFlag>) -> nix::Result<nix::sys::wait::WaitStatus> {
         match self.configuration {
             Configuration::Builtin(_, _, _) => {
-                if let Status::Done(status) = self.status.get() {
-                    Ok(nix::sys::wait::WaitStatus::Exited(nix::unistd::getpid(), status))
-                } else {
-                    panic!("builtin should not be running")
+                match self.status.get() {
+                    Status::Started(_, s) => { Ok(s) },
+                    Status::NotStarted => { panic!("builtin should not be running") }
                 }
             },
             Configuration::Command(_, _, _) => {
                 match self.status.get() {
-                    Status::Done(status) => {
-                        Ok(nix::sys::wait::WaitStatus::Exited(nix::unistd::getpid(), status))
-                    },
-                    Status::Running(pid) => {
-                        let result = nix::sys::wait::waitpid(pid, flags);
-                        if let Ok(nix::sys::wait::WaitStatus::Exited(_, status)) = result {
-                            self.status.set(Status::Done(status));
+                    Status::Started(pid, status) => {
+                        match self.running_status(status) {
+                            true => {
+                                let wait_result = nix::sys::wait::waitpid(pid, flags);
+                                match wait_result {
+                                    Ok(result) => {
+                                        self.status.set(Status::Started(pid, result));
+                                        Ok(result)
+                                    },
+                                    Err(e) => {
+                                        Err(e)
+                                    }
+                                }
+                            }
+                            false => {
+                                Err(nix::Error::from_errno(nix::Errno::EINVAL))
+                            }
                         }
-                        result
                     },
                     Status::NotStarted => {
                         Err(nix::Error::from_errno(nix::Errno::EINVAL))
@@ -243,7 +261,9 @@ impl Job {
                 }
             },
             Configuration::Pipeline(_, ref second) => {
-                second.wait(flags)
+                let result = second.wait(flags);
+                self.status.set(second.status.get());
+                result
             }
         }
     }
@@ -256,24 +276,30 @@ impl Job {
     pub fn run_with_output<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<String, Error> {
         match nix::unistd::pipe() {
             Ok((output, input)) => {
-                self.run_with_fd(None, Some(input), handler, &vec![output]);
-                if let Ok(nix::sys::wait::WaitStatus::Exited(_, _)) = self.wait_until_complete() {
-                    if let Err(_) = nix::unistd::close(input) {
-                        Err(Error::Pipe)
-                    } else {
-                        unsafe {
-                            // note: the fd is not a file, but Rust's api seems to work anyway
-                            let mut output_file = File::from_raw_fd(output);
-                            let mut contents = String::new();
-                            if let Err(_) = output_file.read_to_string(&mut contents) {
+                match self.run_with_fd(None, Some(input), handler, &vec![output]) {
+                    Ok(_) => {
+                        if let Ok(nix::sys::wait::WaitStatus::Exited(_, _)) = self.wait(None) {
+                            if let Err(_) = nix::unistd::close(input) {
                                 Err(Error::Pipe)
                             } else {
-                                Ok(contents)
+                                unsafe {
+                                    // note: the fd is not a file, but Rust's api seems to work anyway
+                                    let mut output_file = File::from_raw_fd(output);
+                                    let mut contents = String::new();
+                                    if let Err(_) = output_file.read_to_string(&mut contents) {
+                                        Err(Error::Pipe)
+                                    } else {
+                                        Ok(contents)
+                                    }
+                                }
                             }
+                        } else {
+                            Err(Error::SubshellExecution)
                         }
                     }
-                } else {
-                    Err(Error::SubshellExecution)
+                    Err(e) => {
+                        Err(e)
+                    }
                 }
             },
             Err(_) => Err(Error::Pipe)
@@ -281,6 +307,10 @@ impl Job {
     }
 
     fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<RawFd>, output_fd: Option<RawFd>, handler: &mut B, post_fork_close: &[RawFd]) -> Result<Status, Error> {
+        match self.status.get() {
+            Status::NotStarted => {},
+            _ => { panic!("cannot re-run already running job"); }
+        };
         use nix::fcntl::*;
         use nix::sys::stat::*;
         fn apply_fd_changes(input_fd: Option<RawFd>, output_fd: Option<RawFd>, options: &HashMap<RawFd, FdOption>) -> (bool, Vec<(RawFd, RawFd, Option<RawFd>)>) {
@@ -398,7 +428,7 @@ impl Job {
                     result = handler.handle_builtin(&name, &args);
                 }
                 reverse_fd_changes(&log);
-                self.status.set(Status::Done(result));
+                self.status.set(Status::Started(nix::unistd::getpid(), nix::sys::wait::WaitStatus::Exited(nix::unistd::getpid(), result)));
                 Ok(self.status.get())
             },
             Configuration::Command(ref path, ref args, ref options) => {
@@ -416,7 +446,7 @@ impl Job {
                         if let Ok(fork_result) = nix::unistd::fork() {
                             match fork_result {
                                 nix::unistd::ForkResult::Parent{child} => {
-                                    self.status.set(Status::Running(child));
+                                    self.status.set(Status::Started(child, nix::sys::wait::WaitStatus::StillAlive));
                                     Ok(self.status.get())
                                 },
                                 nix::unistd::ForkResult::Child => {
@@ -456,6 +486,7 @@ impl Job {
                                 second_cleanup.push(input);
                                 match second.run_with_fd(Some(output), output_fd, handler, &second_cleanup) {
                                     Ok(s) => {
+                                        self.status.set(s);
                                         result = Ok(s);
                                     },
                                     Err(e) => {
@@ -487,6 +518,7 @@ fn join_components<'a>(components: &'a [StringLiteralComponent<'a>]) -> String {
         match s {
             &StringLiteralComponent::Literal(s) => String::from(s),
             &StringLiteralComponent::EnvVar(v) => env::var(v).unwrap_or(String::from("")),
+            _ => {String::from("")}
         }
     }).collect();
     strs.join("")
