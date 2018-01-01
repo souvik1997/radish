@@ -15,6 +15,7 @@ users = "^0.6.0"
 ansi_term = "0.9"
 ketos = "^0.10"
 ketos_derive = "^0.10"
+glob = "^0.2.11"
 
  [dev-dependencies]
  tempdir = "0.3.4"

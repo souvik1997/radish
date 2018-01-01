@@ -14,6 +14,8 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
+extern crate glob;
+use self::glob::glob;
 
 #[derive(Debug)]
 pub enum FdOption {
@@ -98,7 +100,34 @@ impl Job {
                             }
                         },
                         &Argument::Literal(s) => {
-                            str_arguments.push(String::from(join_components(s)));
+                            let joined = join_components(s);
+                            if let Ok(it) = glob(&joined) {
+                                let mut glob_components: Vec<String> = Vec::new();
+                                let mut glob_valid = true;
+                                for entry in it {
+                                    match entry {
+                                        Ok(path) => {
+                                            if let Some(path_str) = path.to_str() {
+                                                glob_components.push(String::from(path_str));
+                                            } else {
+                                                glob_valid = false;
+                                                break
+                                            }
+                                        }
+                                        Err(_) => {
+                                            glob_valid = false;
+                                            break
+                                        }
+                                    }
+                                }
+                                if glob_valid && glob_components.len() > 0 {
+                                    str_arguments.append(&mut glob_components);
+                                } else {
+                                    str_arguments.push(joined);
+                                }
+                            } else {
+                                str_arguments.push(joined);
+                            }
                         }
                     };
                 }
