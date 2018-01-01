@@ -69,11 +69,17 @@ impl Shell {
         }
     }
 
-    pub fn run_interactive(&mut self) {
+    pub fn run_interactive(&mut self) -> i8 {
         let state = &mut self.state;
         let pid = nix::unistd::getpid();
-        let process_group_manager = ProcessGroupManager::new(pid).expect("failed to set process group");
-        let terminal_group_manager = TerminalFgGroupManager::new(pid).expect("failed to set terminal process group");
+        let _process_group_manager = ProcessGroupManager::new(pid).expect("failed to set process group");
+        let _terminal_group_manager = TerminalFgGroupManager::new(pid).expect("failed to set terminal process group");
+        let block_sigaction = nix::sys::signal::SigAction::new(nix::sys::signal::SigHandler::SigIgn, nix::sys::signal::SaFlags::empty(), nix::sys::signal::SigSet::empty());
+        unsafe {
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGINT, &block_sigaction).expect("failed to ignore SIGINT");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTSTP, &block_sigaction).expect("failed to ignore SIGSTP");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGQUIT, &block_sigaction).expect("failed to ignore SIGQUIT");
+        }
         loop {
             let input = state.readline();
             match input {
@@ -120,9 +126,15 @@ impl Shell {
                         }
                     }
                 }
-                Err(error) => {
-                    println!("error while reading input: {:?}", error);
-                    process::exit(-1);
+                Err(readline::error::ReadlineError::Eof) => {
+                    return 0;
+                },
+                Err(readline::error::ReadlineError::Interrupted) => {
+
+                },
+                Err(e) => {
+                    println!("input error: {:?}", e);
+                    return -1;
                 }
             }
         }

@@ -12,7 +12,9 @@ extern crate ketos_derive;
 
 mod shell;
 
+use std::process;
+
 fn main() {
     let mut s = shell::Shell::new();
-    s.run_interactive();
+    process::exit(s.run_interactive() as i32);
 }
