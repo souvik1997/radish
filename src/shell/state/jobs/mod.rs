@@ -10,8 +10,10 @@ use std::path::PathBuf;
 use std::env;
 use std::fmt;
 use std::cell::Cell;
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::fs;
+use std::fs::File;
+use std::io::prelude::*;
 
 #[derive(Debug)]
 pub enum FdOption {
@@ -40,6 +42,7 @@ pub enum Error {
     Fork,
     StringEncoding,
     Subshell(Rc<Error>),
+    SubshellExecution,
     CommandNotFound(PathBuf),
     CorruptPath,
     LeftPipe(Rc<Error>),
@@ -81,7 +84,8 @@ impl Job {
                                 Ok(mut subjob) => {
                                     match subjob.run_with_output(builtin_handler) {
                                         Ok(output) => {
-                                            str_arguments.push(output);
+                                            let parts: Vec<&str> = output.split_whitespace().collect();
+                                            str_arguments.push(parts.join(" "));
                                         }
                                         Err(error) => {
                                             return Err(Error::Subshell(Rc::new(error)));
@@ -221,7 +225,30 @@ impl Job {
     }
 
     pub fn run_with_output<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<String, Error> {
-        Ok(String::from(""))
+        match nix::unistd::pipe() {
+            Ok((output, input)) => {
+                self.run_with_fd(None, Some(input), handler, &vec![output]);
+                if let Ok(nix::sys::wait::WaitStatus::Exited(_, _)) = self.wait_until_complete() {
+                    if let Err(_) = nix::unistd::close(input) {
+                        Err(Error::Pipe)
+                    } else {
+                        unsafe {
+                            // note: the fd is not a file, but Rust's api seems to work anyway
+                            let mut output_file = File::from_raw_fd(output);
+                            let mut contents = String::new();
+                            if let Err(_) = output_file.read_to_string(&mut contents) {
+                                Err(Error::Pipe)
+                            } else {
+                                Ok(contents)
+                            }
+                        }
+                    }
+                } else {
+                    Err(Error::SubshellExecution)
+                }
+            },
+            Err(_) => Err(Error::Pipe)
+        }
     }
 
     fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<RawFd>, output_fd: Option<RawFd>, handler: &mut B, post_fork_close: &[RawFd]) -> Result<Status, Error> {
