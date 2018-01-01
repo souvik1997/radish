@@ -65,6 +65,22 @@ pub trait BuiltinHandler {
     fn is_builtin(&mut self, name: &str) -> bool;
 }
 
+impl Drop for Job {
+    fn drop(&mut self) {
+        match self.configuration {
+            Configuration::Command(_,_,_) => {
+                match self.status.get() {
+                    Status::Started(pid, _, _) => {
+                        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+                    },
+                    _ => { }
+                }
+            },
+            _ => {}
+        }
+    }
+}
+
 impl Job {
     pub fn from_expr<B: BuiltinHandler>(expr: &Expr, builtin_handler: &mut B) -> Result<Job, Error> {
         match expr {
@@ -212,20 +228,6 @@ impl Job {
         */
     }
 
-    pub fn running_status(&self, status: nix::sys::wait::WaitStatus) -> bool {
-        match status {
-            nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Stopped(_,_) | nix::sys::wait::WaitStatus::Continued(_) => { true },
-            _ => { false }
-        }
-    }
-
-    pub fn running(&self) -> bool {
-        match self.status.get() {
-            Status::NotStarted => { false },
-            Status::Started(_, _, s) => { self.running_status(s) }
-        }
-    }
-
     pub fn wait(&self, flags: Option<nix::sys::wait::WaitPidFlag>) -> nix::Result<nix::sys::wait::WaitStatus> {
         fn restore_term_group() {
             let block_sigaction = nix::sys::signal::SigAction::new(nix::sys::signal::SigHandler::SigIgn, nix::sys::signal::SaFlags::empty(), nix::sys::signal::SigSet::empty());
@@ -254,9 +256,9 @@ impl Job {
             Configuration::Command(_, _, _) => {
                 match self.status.get() {
                     Status::Started(pid, pgid, status) => {
-                        match self.running_status(status) {
-                            true => {
-                                let wait_result = nix::sys::wait::waitpid(-pgid, flags);
+                        match status {
+                            nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Continued(_) => {
+                                let wait_result = nix::sys::wait::waitpid(pid, flags);
                                 match wait_result {
                                     Ok(result) => {
                                         self.status.set(Status::Started(pid, pgid, result));
@@ -267,7 +269,7 @@ impl Job {
                                     }
                                 }
                             }
-                            false => {
+                            _ => {
                                 Err(nix::Error::from_errno(nix::Errno::EINVAL))
                             }
                         }
@@ -493,11 +495,17 @@ impl Job {
                                     });
                                     if success {
                                         if let Some(child_pgid) = pgid {
-                                            nix::unistd::setpgid(0, child_pgid);
+                                            nix::unistd::setpgid(0, child_pgid).expect("failed to setpgid to child pgid in child");
                                         } else {
                                             let child_pid = nix::unistd::getpid();
-                                            nix::unistd::setpgid(0, child_pid).expect("failed to setpgid in child");
+                                            nix::unistd::setpgid(0, child_pid).expect("failed to setpgid to child pid in child");
                                             //nix::unistd::setsid().expect("failed to create new session/process group in child");
+                                        }
+                                        let default_sigaction = nix::sys::signal::SigAction::new(nix::sys::signal::SigHandler::SigDfl, nix::sys::signal::SaFlags::empty(), nix::sys::signal::SigSet::empty());
+                                        unsafe {
+                                            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGINT, &default_sigaction).expect("failed to set SIGINT");
+                                            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTSTP, &default_sigaction).expect("failed to set SIGSTP");
+                                            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGQUIT, &default_sigaction).expect("failed to set SIGQUIT");
                                         }
                                         match nix::unistd::execvp(&binary_cstring, &args_cstring) {
                                             _ => { }
