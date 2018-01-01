@@ -20,6 +20,7 @@ use nix;
 pub struct ShellState {
     background_jobs: RwLock<Vec<jobs::Job>>,
     foreground_jobs: RwLock<Vec<jobs::Job>>,
+    stopped_jobs: RwLock<Vec<jobs::Job>>,
     current_job_pid: RwLock<Cell<Option<nix::libc::pid_t>>>,
     pub ketos_interp: Interpreter,
     builtins: HashMap<String, Box<(FnMut(&[String]) -> i8)>>
@@ -30,6 +31,7 @@ impl ShellState {
         let mut s = ShellState {
             background_jobs: RwLock::new(Vec::<jobs::Job>::new()),
             foreground_jobs: RwLock::new(Vec::<jobs::Job>::new()),
+            stopped_jobs: RwLock::new(Vec::<jobs::Job>::new()),
             current_job_pid: RwLock::new(Cell::new(None)),
             ketos_interp: Interpreter::new(),
             builtins: HashMap::new()
@@ -91,18 +93,19 @@ impl ShellState {
         }
     }
 
-    pub fn run_foreground_jobs(&mut self) -> Result<i8, jobs::Error> {
-        fn get_next_job(queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
-            let mut foreground_jobs = queue.write().unwrap();
-            if foreground_jobs.len() > 0 {
-                let job = foreground_jobs.remove(0);
-                Some(job)
-            } else {
-                None
-            }
+    fn get_next_job(&self, queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
+        let mut foreground_jobs = queue.write().unwrap();
+        if foreground_jobs.len() > 0 {
+            let job = foreground_jobs.remove(0);
+            Some(job)
+        } else {
+            None
         }
+    }
+
+    pub fn run_foreground_jobs(&mut self) -> Result<i8, jobs::Error> {
         let mut last_exit_code: i8 = 0;
-        while let Some(mut job) = get_next_job(&self.foreground_jobs) {
+        while let Some(mut job) = self.get_next_job(&self.foreground_jobs) {
             self.current_job_pid.write().unwrap().set(None);
             loop {
                 match job.status.get() {
@@ -120,7 +123,7 @@ impl ShellState {
                             true => {
                                 match job.wait(None) {
                                     Ok(nix::sys::wait::WaitStatus::Stopped(_,_)) => {
-                                        self.background_jobs.write().unwrap().push(job);
+                                        self.stopped_jobs.write().unwrap().push(job);
                                         break;
                                     }
                                     Ok(nix::sys::wait::WaitStatus::Exited(_,code)) => {
