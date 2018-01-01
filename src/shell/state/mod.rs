@@ -55,7 +55,6 @@ impl ShellState {
         }));
         s.builtins.insert(String::from("exit"), Box::new(|_args: &[String]| -> i8 {
             process::exit(0);
-            0
         }));
         s
     }
