@@ -58,19 +58,17 @@ impl ShellState {
         }
     }
 
-    fn get_next_job(&self, queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
-        let mut foreground_jobs = queue.write().unwrap();
-        if foreground_jobs.len() > 0 {
-            let job = foreground_jobs.remove(0);
-            Some(job)
-        } else {
-            None
+    pub fn run_foreground_jobs(&mut self) -> Result<(), jobs::Error> {
+        fn get_next_job(queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
+            let mut foreground_jobs = queue.write().unwrap();
+            if foreground_jobs.len() > 0 {
+                let job = foreground_jobs.remove(0);
+                Some(job)
+            } else {
+                None
+            }
         }
-    }
-
-    pub fn run_foreground_jobs(&mut self) -> Result<i8, jobs::Error> {
-        let mut last_exit_code: i8 = 0;
-        while let Some(mut job) = self.get_next_job(&self.foreground_jobs) {
+        while let Some(mut job) = get_next_job(&self.foreground_jobs) {
             self.current_job_pid.write().unwrap().set(None);
             loop {
                 match job.status.get() {
@@ -84,26 +82,41 @@ impl ShellState {
                     }
                     jobs::Status::Started(pid, _, status) => {
                         self.current_job_pid.write().unwrap().set(Some(pid));
-                        match job.running_status(status) {
-                            true => {
-                                match job.wait(None) {
+                        match status {
+                            nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Continued(_) => {
+                                match job.wait(Some(nix::sys::wait::WUNTRACED)) {
                                     Ok(nix::sys::wait::WaitStatus::Stopped(_,_)) => {
                                         self.stopped_jobs.write().unwrap().push(job);
                                         break;
-                                    }
-                                    Ok(nix::sys::wait::WaitStatus::Exited(_,code)) => {
-                                        last_exit_code = code;
-                                        break;
-                                    }
-                                    Ok(_) => {
-                                        if !job.running() {
-                                            break;
-                                        }
                                     },
+                                    Ok(nix::sys::wait::WaitStatus::Exited(_,_)) | Ok(nix::sys::wait::WaitStatus::Signaled(_,_,_))=> {
+                                        break;
+                                    },
+                                    Ok(nix::sys::wait::WaitStatus::StillAlive) => {
+                                        panic!("job should not be still running since waitpid was not called with WNOHANG");
+                                    },
+                                    Ok(nix::sys::wait::WaitStatus::Continued(_)) => {
+                                        panic!("job should not be continued since waitpid was not called with WCONTINUED");
+                                    }
+                                    #[cfg(not(target_os="macos"))]
+                                    Ok(nix::sys::wait::WaitStatus::PtraceEvent(_,_,_)) => {
+
+                                    }
                                     Err(_) => { return Err(jobs::Error::Wait); }
                                 }
                             },
-                            false => {
+                            nix::sys::wait::WaitStatus::Exited(_,_) => {
+                                break;
+                            },
+                            nix::sys::wait::WaitStatus::Signaled(_,_,_) => {
+                                panic!("terminated job found in foreground queue");
+                            },
+                            #[cfg(not(target_os="macos"))]
+                            nix::sys::wait::WaitStatus::PtraceEvent(_,_,_) => {
+                                panic!("ptraced job found in foreground queue");
+                            },
+                            nix::sys::wait::WaitStatus::Stopped(_,_) => {
+                                // bring job to foreground
                                 break;
                             }
                         }
