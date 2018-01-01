@@ -40,16 +40,19 @@ fn parse_one<'a>(t: &'a [Token]) -> Result<Expr<'a>, Error> {
             },
             &Token::Subshell => {
                 iter.next();
-                if let Some(next_index_reversed) = t.iter().rev().position(|tk| {
-                    tk == &Token::Subshell
-                }) {
-                    let next_index = t.len() - next_index_reversed - 1;
+                let mut next_index_opt = None;
+                iter.clone().for_each(|(i, tk)| {
+                    if tk == &Token::Subshell {
+                        next_index_opt = Some(i);
+                    }
+                });
+                if let Some(next_index) = next_index_opt {
                     let inner_result = parse_one(&t[index+1..next_index]);
                     match inner_result {
                         Ok(inner) => {
                             arguments.push(Argument::Subshell(Rc::new(inner)));
                             while let Some(adv) = iter.next() {
-                                if adv.0 >= next_index {
+                                if adv.0 > next_index {
                                     break;
                                 }
                             }
