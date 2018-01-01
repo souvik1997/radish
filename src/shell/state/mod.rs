@@ -56,6 +56,16 @@ impl ShellState {
         s.builtins.insert(String::from("exit"), Box::new(|_args: &[String]| -> i8 {
             process::exit(0);
         }));
+        s.builtins.insert(String::from("set"), Box::new(|args: &[String]| -> i8 {
+            if args.len() < 2 {
+                -1
+            } else {
+                let var = &args[0];
+                let value = &args[1];
+                env::set_var(var, value);
+                0
+            }
+        }));
         s
     }
 
