@@ -35,7 +35,7 @@ pub enum Configuration {
 #[derive(Debug, Clone, Copy)]
 pub enum Status {
     NotStarted,
-    Started(nix::libc::pid_t, nix::sys::wait::WaitStatus),
+    Started(nix::libc::pid_t /* pid */, nix::libc::pid_t /* pgid */, nix::sys::wait::WaitStatus),
 }
 
 #[derive(Debug)]
@@ -222,27 +222,44 @@ impl Job {
     pub fn running(&self) -> bool {
         match self.status.get() {
             Status::NotStarted => { false },
-            Status::Started(_, s) => { self.running_status(s) }
+            Status::Started(_, _, s) => { self.running_status(s) }
         }
     }
 
     pub fn wait(&self, flags: Option<nix::sys::wait::WaitPidFlag>) -> nix::Result<nix::sys::wait::WaitStatus> {
+        fn restore_term_group() {
+            let block_sigaction = nix::sys::signal::SigAction::new(nix::sys::signal::SigHandler::SigIgn, nix::sys::signal::SaFlags::empty(), nix::sys::signal::SigSet::empty());
+            let default_sigaction = nix::sys::signal::SigAction::new(nix::sys::signal::SigHandler::SigDfl, nix::sys::signal::SaFlags::empty(), nix::sys::signal::SigSet::empty());
+            unsafe {
+                nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &block_sigaction);
+                nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &block_sigaction);
+                nix::unistd::tcsetpgrp(0, nix::unistd::getpgid(None).unwrap()).expect("failed to reset terminal group");
+                nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &default_sigaction);
+                nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &default_sigaction);
+            }
+        }
+        let result = self.wait_without_restore(flags);
+        restore_term_group();
+        result
+    }
+
+    fn wait_without_restore(&self, flags: Option<nix::sys::wait::WaitPidFlag>) -> nix::Result<nix::sys::wait::WaitStatus> {
         match self.configuration {
             Configuration::Builtin(_, _, _) => {
                 match self.status.get() {
-                    Status::Started(_, s) => { Ok(s) },
+                    Status::Started(_, _, s) => { Ok(s) },
                     Status::NotStarted => { panic!("builtin should not be running") }
                 }
             },
             Configuration::Command(_, _, _) => {
                 match self.status.get() {
-                    Status::Started(pid, status) => {
+                    Status::Started(pid, pgid, status) => {
                         match self.running_status(status) {
                             true => {
-                                let wait_result = nix::sys::wait::waitpid(pid, flags);
+                                let wait_result = nix::sys::wait::waitpid(-pgid, flags);
                                 match wait_result {
                                     Ok(result) => {
-                                        self.status.set(Status::Started(pid, result));
+                                        self.status.set(Status::Started(pid, pgid, result));
                                         Ok(result)
                                     },
                                     Err(e) => {
@@ -260,23 +277,32 @@ impl Job {
                     }
                 }
             },
-            Configuration::Pipeline(_, ref second) => {
-                let result = second.wait(flags);
-                self.status.set(second.status.get());
-                result
+            Configuration::Pipeline(ref first, ref second) => {
+                match first.wait_without_restore(flags) {
+                    Ok(_) => {
+                        match second.wait_without_restore(flags) {
+                            Ok(r) => {
+                                self.status.set(second.status.get());
+                                Ok(r)
+                            },
+                            Err(e) => Err(e)
+                        }
+                    },
+                    Err(e) => Err(e)
+                }
             }
         }
     }
 
     pub fn run<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<Status, Error> {
         //println!("{:?}", self);
-        self.run_with_fd(None, None, handler, &vec![])
+        self.run_with_fd(None, None, handler, &vec![], None)
     }
 
     pub fn run_with_output<B: BuiltinHandler>(&mut self, handler: &mut B) -> Result<String, Error> {
         match nix::unistd::pipe() {
             Ok((output, input)) => {
-                match self.run_with_fd(None, Some(input), handler, &vec![output]) {
+                match self.run_with_fd(None, Some(input), handler, &vec![output], None) {
                     Ok(_) => {
                         if let Ok(nix::sys::wait::WaitStatus::Exited(_, _)) = self.wait(None) {
                             if let Err(_) = nix::unistd::close(input) {
@@ -306,7 +332,7 @@ impl Job {
         }
     }
 
-    fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<RawFd>, output_fd: Option<RawFd>, handler: &mut B, post_fork_close: &[RawFd]) -> Result<Status, Error> {
+    fn run_with_fd<B: BuiltinHandler>(&mut self, input_fd: Option<RawFd>, output_fd: Option<RawFd>, handler: &mut B, post_fork_close: &[RawFd], pgid: Option<nix::libc::pid_t>) -> Result<Status, Error> {
         match self.status.get() {
             Status::NotStarted => {},
             _ => { panic!("cannot re-run already running job"); }
@@ -428,7 +454,7 @@ impl Job {
                     result = handler.handle_builtin(&name, &args);
                 }
                 reverse_fd_changes(&log);
-                self.status.set(Status::Started(nix::unistd::getpid(), nix::sys::wait::WaitStatus::Exited(nix::unistd::getpid(), result)));
+                self.status.set(Status::Started(nix::unistd::getpid(), nix::unistd::getpgid(None).unwrap() /* should always succeed */, nix::sys::wait::WaitStatus::Exited(nix::unistd::getpid(), result)));
                 Ok(self.status.get())
             },
             Configuration::Command(ref path, ref args, ref options) => {
@@ -446,7 +472,16 @@ impl Job {
                         if let Ok(fork_result) = nix::unistd::fork() {
                             match fork_result {
                                 nix::unistd::ForkResult::Parent{child} => {
-                                    self.status.set(Status::Started(child, nix::sys::wait::WaitStatus::StillAlive));
+                                    let child_pgid = pgid.unwrap_or(child);
+                                    nix::unistd::setpgid(child, child_pgid).expect("failed to set process group for child");
+                                    if !self.background {
+                                        if let Ok(existing_group) = nix::unistd::tcgetpgrp(0) {
+                                            if existing_group != child_pgid {
+                                                nix::unistd::tcsetpgrp(0, child_pgid).expect("failed to tcsetpgrp stdin");
+                                            }
+                                        }
+                                    }
+                                    self.status.set(Status::Started(child, child_pgid, nix::sys::wait::WaitStatus::StillAlive));
                                     Ok(self.status.get())
                                 },
                                 nix::unistd::ForkResult::Child => {
@@ -457,8 +492,15 @@ impl Job {
                                         }
                                     });
                                     if success {
+                                        if let Some(child_pgid) = pgid {
+                                            nix::unistd::setpgid(0, child_pgid);
+                                        } else {
+                                            let child_pid = nix::unistd::getpid();
+                                            nix::unistd::setpgid(0, child_pid).expect("failed to setpgid in child");
+                                            //nix::unistd::setsid().expect("failed to create new session/process group in child");
+                                        }
                                         match nix::unistd::execvp(&binary_cstring, &args_cstring) {
-                                            _ => { process::exit(-1) }
+                                            _ => { }
                                         }
                                     }
                                     process::exit(-1);
@@ -480,19 +522,24 @@ impl Job {
                         let result: Result<Status, Error>;
                         let mut first_cleanup = Vec::from(post_fork_close);
                         first_cleanup.push(output);
-                        match first.run_with_fd(input_fd, Some(input), handler, &first_cleanup) {
-                            Ok(_) => {
-                                let mut second_cleanup = Vec::from(post_fork_close);
-                                second_cleanup.push(input);
-                                match second.run_with_fd(Some(output), output_fd, handler, &second_cleanup) {
-                                    Ok(s) => {
-                                        self.status.set(s);
-                                        result = Ok(s);
-                                    },
-                                    Err(e) => {
-                                        result = Err(Error::RightPipe(Rc::new(e)));
+                        match first.run_with_fd(input_fd, Some(input), handler, &first_cleanup, pgid) {
+                            Ok(status) => {
+                                match status {
+                                    Status::NotStarted => { panic!("pipeline has not started"); },
+                                    Status::Started(first_pid, first_pgid, _) => {
+                                        let mut second_cleanup = Vec::from(post_fork_close);
+                                        second_cleanup.push(input);
+                                        match second.run_with_fd(Some(output), output_fd, handler, &second_cleanup, Some(first_pgid)) {
+                                            Ok(s) => {
+                                                self.status.set(s);
+                                                result = Ok(s);
+                                            },
+                                            Err(e) => {
+                                                result = Err(Error::RightPipe(Rc::new(e)));
+                                            }
+                                        };
                                     }
-                                };
+                                }
                             },
                             Err(e) => {
                                 result = Err(Error::LeftPipe(Rc::new(e)));

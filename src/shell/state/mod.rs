@@ -117,7 +117,7 @@ impl ShellState {
                             }
                         }
                     }
-                    jobs::Status::Started(pid, status) => {
+                    jobs::Status::Started(pid, _, status) => {
                         self.current_job_pid.write().unwrap().set(Some(pid));
                         match job.running_status(status) {
                             true => {
@@ -138,7 +138,9 @@ impl ShellState {
                                     Err(_) => { return Err(jobs::Error::Wait); }
                                 }
                             },
-                            false => {}
+                            false => {
+                                break;
+                            }
                         }
                     },
                 }

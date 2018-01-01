@@ -110,7 +110,6 @@ fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token> where F: (Fn(
         match state {
             State::Base => {
                 if filter(c) {
-                    println!("breaking.. {:?}@{} of {:?}", c,i, input);
                     end_position = i;
                     break;
                 }

@@ -12,8 +12,6 @@ pub struct Shell {
 
 struct TerminalFgGroupManager {
     stdin_group: nix::libc::pid_t,
-    stdout_group: nix::libc::pid_t,
-    stderr_group: nix::libc::pid_t,
 }
 
 
@@ -21,25 +19,11 @@ impl TerminalFgGroupManager {
     pub fn new(group: nix::libc::pid_t) -> Option<TerminalFgGroupManager> {
         match nix::unistd::tcgetpgrp(0) {
             Ok(stdin_group) => {
-                match nix::unistd::tcgetpgrp(1) {
-                    Ok(stdout_group) => {
-                        match nix::unistd::tcgetpgrp(2) {
-                            Ok(stderr_group) => {
-                                let t = TerminalFgGroupManager {
-                                    stdin_group: stdin_group,
-                                    stdout_group: stdout_group,
-                                    stderr_group: stderr_group,
-                                };
-                                nix::unistd::tcsetpgrp(2, group);
-                                nix::unistd::tcsetpgrp(1, group);
-                                nix::unistd::tcsetpgrp(0, group);
-                                Some(t)
-                            },
-                            Err(_) => None
-                        }
-                    },
-                    Err(_) => None
-                }
+                let t = TerminalFgGroupManager {
+                    stdin_group: stdin_group,
+                };
+                nix::unistd::tcsetpgrp(0, group);
+                Some(t)
             },
             Err(_) => None
         }
@@ -47,8 +31,6 @@ impl TerminalFgGroupManager {
 }
 impl Drop for TerminalFgGroupManager {
     fn drop(&mut self) {
-        nix::unistd::tcsetpgrp(2, self.stderr_group);
-        nix::unistd::tcsetpgrp(1, self.stdout_group);
         nix::unistd::tcsetpgrp(0, self.stdin_group);
     }
 }
