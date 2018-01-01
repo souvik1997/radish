@@ -23,66 +23,31 @@ pub struct ShellState {
     stopped_jobs: RwLock<Vec<jobs::Job>>,
     current_job_pid: RwLock<Cell<Option<nix::libc::pid_t>>>,
     pub ketos_interp: Interpreter,
-    builtins: HashMap<String, Box<(FnMut(&[String]) -> i8)>>
 }
 
 impl ShellState {
     pub fn new() -> Self {
-        let mut s = ShellState {
+        ShellState {
             background_jobs: RwLock::new(Vec::<jobs::Job>::new()),
             foreground_jobs: RwLock::new(Vec::<jobs::Job>::new()),
             stopped_jobs: RwLock::new(Vec::<jobs::Job>::new()),
             current_job_pid: RwLock::new(Cell::new(None)),
-            ketos_interp: Interpreter::new(),
-            builtins: HashMap::new()
-        };
-        s.builtins.insert(String::from("cd"), Box::new(|args: &[String]| -> i8 {
-            if let Some(first) = args.first() {
-                let p = PathBuf::from(first);
-                if p.exists() && p.is_dir() {
-                    match env::set_current_dir(p) {
-                        Ok(_) => 0,
-                        Err(_) => -1,
-                    }
-                } else {
-                    1
-                }
-            } else {
-                1
-            }
-        }));
-        s.builtins.insert(String::from("echo"), Box::new(|args: &[String]| -> i8 {
-            println!("{}", args.join(" "));
-            0
-        }));
-        s.builtins.insert(String::from("echo-stderr"), Box::new(|args: &[String]| -> i8 {
-            eprintln!("{}", args.join(" "));
-            0
-        }));
-        s.builtins.insert(String::from("exit"), Box::new(|_args: &[String]| -> i8 {
-            process::exit(0);
-        }));
-        s.builtins.insert(String::from("set"), Box::new(|args: &[String]| -> i8 {
-            if args.len() < 2 {
-                -1
-            } else {
-                let var = &args[0];
-                let value = &args[1];
-                env::set_var(var, value);
-                0
-            }
-        }));
-        s
+            ketos_interp: Interpreter::new()
+        }
     }
 
     pub fn enqueue_job(&mut self, expr: &Expr) -> Result<(), jobs::Error> {
         match jobs::Job::from_expr(&expr, self) {
             Ok(mut job) => {
                 if job.background {
-                    job.run(self);
-                    let mut background_jobs = self.background_jobs.write().unwrap();
-                    background_jobs.push(job);
-                    Ok(())
+                    match job.run(self) {
+                        Ok(_) => {
+                            let mut background_jobs = self.background_jobs.write().unwrap();
+                            background_jobs.push(job);
+                            Ok(())
+                        },
+                        Err(e) => Err(e)
+                    }
                 } else {
                     let mut foreground_jobs = self.foreground_jobs.write().unwrap();
                     foreground_jobs.push(job);
@@ -147,7 +112,7 @@ impl ShellState {
             }
         }
         self.current_job_pid.write().unwrap().set(None);
-        Ok(last_exit_code)
+        Ok(())
     }
 
     pub fn readline(&mut self) -> readline::Result<String> {
@@ -178,25 +143,166 @@ impl readline::delegate::Delegate for ShellState {
 
 impl jobs::BuiltinHandler for ShellState {
     fn handle_builtin(&mut self, name: &str, args: &[String]) -> i8 {
-        if let Some(b) = self.builtins.get_mut(name) {
-            let func = Box::deref_mut(b);
-            func(args)
-        } else {
-            let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
-            if let Some(value) = self.ketos_interp.scope().get_value(ketos_name) {
-                let result = self.ketos_interp.call_value(value, args.into_iter().map(|s| { ketos::Value::String(ketos::rc_vec::RcString::new(s.clone())) }).collect());
-                match result {
-                    Ok(val) => {
-                        self.ketos_interp.display_value(&val);
-                        0
-                    },
-                    Err(error) => {
-                        println!("error: {:?}", error);
-                        -1
+        match name {
+            "cd" => {
+                if let Some(first) = args.first() {
+                    let p = PathBuf::from(first);
+                    if p.exists() && p.is_dir() {
+                        match env::set_current_dir(p) {
+                            Ok(_) => 0,
+                            Err(_) => -1,
+                        }
+                    } else {
+                        1
                     }
+                } else {
+                    1
                 }
-            } else {
-                -1
+            },
+            "echo" => {
+                println!("{}", args.join(" "));
+                0
+            },
+            "echo-stderr" => {
+                eprintln!("{}", args.join(" "));
+                0
+            },
+            "exit" => {
+                process::exit(0);
+            },
+            "set" => {
+                if args.len() < 2 {
+                    -1
+                } else {
+                    let var = &args[0];
+                    let value = &args[1];
+                    env::set_var(var, value);
+                    0
+                }
+            },
+            "jobs" => {
+                println!("background: ");
+                for (i, job) in self.background_jobs.read().unwrap().iter().enumerate() {
+                    println!("  {}: {:?}", i, job);
+                }
+                println!("stopped: ");
+                for (i, job) in self.stopped_jobs.read().unwrap().iter().enumerate() {
+                    println!("  {}: {:?}", i, job);
+                }
+                0
+            },
+            "fg" | "bg" => {
+                fn find_job_by_pid(jobs: &[jobs::Job], pid: nix::libc::pid_t) -> Option<usize> {
+                    for (index, job) in jobs.iter().enumerate() {
+                        match job.status.get() {
+                            jobs::Status::Started(job_pid, _, _) => {
+                                if job_pid == pid {
+                                    return Some(index);
+                                }
+                            },
+                            _ => {}
+                        }
+                    }
+                    None
+                }
+
+                fn max_job_pid(jobs: &[jobs::Job]) -> Option<nix::libc::pid_t> {
+                    let mut max_pid = None;
+                    for job in jobs {
+                        match job.status.get() {
+                            jobs::Status::Started(job_pid, _, _) => {
+                                if max_pid.is_none() {
+                                    max_pid = Some(job_pid);
+                                } else {
+                                    if job_pid > max_pid.unwrap() {
+                                        max_pid = Some(job_pid);
+                                    }
+                                }
+                            },
+                            _ => {}
+                        }
+                    }
+                    max_pid
+                }
+                let mut bg_jobs = self.background_jobs.write().unwrap();
+                let mut stopped_jobs = self.stopped_jobs.write().unwrap();
+                let pid: Option<nix::libc::pid_t> = {
+                    match args.first() {
+                        Some(pid_str) => { pid_str.parse().ok() }
+                        None => {
+                            if name == "bg" {
+                                max_job_pid(&bg_jobs)
+                            } else {
+                                match max_job_pid(&bg_jobs) {
+                                    Some(max_bg_pid) => {
+                                        match max_job_pid(&stopped_jobs) {
+                                            Some(max_stopped_pid) => {
+                                                if max_stopped_pid > max_bg_pid {
+                                                    Some(max_stopped_pid)
+                                                } else {
+                                                    Some(max_bg_pid)
+                                                }
+                                            },
+                                            None => {
+                                                Some(max_bg_pid)
+                                            }
+                                        }
+                                    },
+                                    None => {
+                                        max_job_pid(&stopped_jobs)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                if let Some(pid) = pid {
+                    let job: jobs::Job;
+                    match find_job_by_pid(&stopped_jobs, pid) {
+                        Some(stopped_jobs_index) => {
+                            job = stopped_jobs.remove(stopped_jobs_index);
+                        },
+                        None => {
+                            if name == "bg" {
+                                eprintln!("error: job {} has not stopped", pid);
+                                return -1;
+                            } else {
+                                match find_job_by_pid(&bg_jobs, pid) {
+                                    Some(bg_jobs_index) => {
+                                        job = bg_jobs.remove(bg_jobs_index);
+                                    },
+                                    None => {
+                                        eprintln!("error: no such job");
+                                        return -1;
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    self.foreground_jobs.write().unwrap().push(job);
+                    0
+                } else {
+                    eprintln!("error: no such job");
+                    -1
+                }
+            }
+            _ => {
+                let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
+                if let Some(value) = self.ketos_interp.scope().get_value(ketos_name) {
+                    let result = self.ketos_interp.call_value(value, args.into_iter().map(|s| { ketos::Value::String(ketos::rc_vec::RcString::new(s.clone())) }).collect());
+                    match result {
+                        Ok(val) => {
+                            self.ketos_interp.display_value(&val);
+                            0
+                        },
+                        Err(error) => {
+                            println!("error: {:?}", error);
+                            -1
+                        }
+                    }
+                } else {
+                    -1
+                }
             }
         }
     }
@@ -206,7 +312,12 @@ impl jobs::BuiltinHandler for ShellState {
         if let Some(_) = self.ketos_interp.scope().get_value(ketos_name) {
             true
         } else {
-            self.builtins.contains_key(name)
+            match name {
+                "cd" | "echo" | "echo-stderr" | "exit" | "set" | "jobs" | "fg" | "bg" => {
+                    true
+                },
+                _ => { false }
+            }
         }
     }
 }
