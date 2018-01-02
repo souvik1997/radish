@@ -351,7 +351,10 @@ fn get_next_job(queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
 }
 
 fn background_reaper(background_jobs: Arc<RwLock<Vec<jobs::Job>>>, stopped_jobs: Arc<RwLock<Vec<jobs::Job>>>) {
-    while let Some(mut job) = get_next_job(&background_jobs) {
+    let mut bg_jobs = background_jobs.write().unwrap();
+    let mut st_jobs = stopped_jobs.write().unwrap();
+    let mut new_bg_jobs = Vec::new();
+    while let Some(mut job) = bg_jobs.pop() {
         match job.get_status() {
             jobs::Status::NotStarted => {
                 panic!("found job in bg queue that has not been started");
@@ -360,14 +363,15 @@ fn background_reaper(background_jobs: Arc<RwLock<Vec<jobs::Job>>>, stopped_jobs:
                 match status {
                     nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Continued(_) => {
                         job.wait(Some(nix::sys::wait::WUNTRACED | nix::sys::wait::WNOHANG));
-                        background_jobs.write().unwrap().push(job);
+                        new_bg_jobs.push(job);
                     },
                     nix::sys::wait::WaitStatus::Stopped(_,_) => {
-                        stopped_jobs.write().unwrap().push(job);
+                        st_jobs.push(job);
                     }
                     _ => {} // remove from queue
                 }
             }
         }
     }
+    *bg_jobs.deref_mut() = new_bg_jobs;
 }
