@@ -158,23 +158,36 @@ impl Job {
                     })
                 } else if let Some(path_os_str) = env::var_os("PATH") {
                     let binary_path = PathBuf::from(&binary_str);
-                    if let Some(binary_appended_path) = env::split_paths(&path_os_str).filter_map(|mut f| {
-                        f.push(&binary_path);
-                        let appended_path = f.as_path();
-                        if appended_path.exists() && appended_path.is_file() {
-                            Some(appended_path.to_path_buf())
+                    if let Ok(resolved) = binary_path.canonicalize() {
+                        if resolved.is_file() {
+                            Ok(Job {
+                                status: RwLock::new(Status::NotStarted),
+                                output: None,
+                                configuration: Configuration::Command(resolved, str_arguments, fd_options),
+                                background: background
+                            })
                         } else {
-                            None
+                            Err(Error::CommandNotFound(binary_path))
                         }
-                    }).next() {
-                        Ok(Job {
-                            status: RwLock::new(Status::NotStarted),
-                            output: None,
-                            configuration: Configuration::Command(binary_appended_path, str_arguments, fd_options),
-                            background: background
-                        })
                     } else {
-                        Err(Error::CommandNotFound(binary_path))
+                        if let Some(binary_appended_path) = env::split_paths(&path_os_str).filter_map(|mut f| {
+                            f.push(&binary_path);
+                            let appended_path = f.as_path();
+                            if appended_path.exists() && appended_path.is_file() {
+                                Some(appended_path.to_path_buf())
+                            } else {
+                                None
+                            }
+                        }).next() {
+                            Ok(Job {
+                                status: RwLock::new(Status::NotStarted),
+                                output: None,
+                                configuration: Configuration::Command(binary_appended_path, str_arguments, fd_options),
+                                background: background
+                            })
+                        } else {
+                            Err(Error::CommandNotFound(binary_path))
+                        }
                     }
                 } else {
                     Err(Error::CorruptPath)
