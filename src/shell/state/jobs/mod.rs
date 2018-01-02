@@ -589,6 +589,7 @@ impl Job {
                                                 nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGINT, &default_sigaction).expect("failed to set SIGINT");
                                                 nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTSTP, &default_sigaction).expect("failed to set SIGSTP");
                                                 nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGQUIT, &default_sigaction).expect("failed to set SIGQUIT");
+                                                nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGPIPE, &default_sigaction).expect("failed to set SIGPIPE");
                                             }
                                             match nix::unistd::execvp(&binary_cstring, &args_cstring) {
                                                 _ => { }
