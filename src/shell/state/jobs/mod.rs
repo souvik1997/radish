@@ -43,12 +43,12 @@ pub enum Status {
 pub enum Error {
     Fork,
     StringEncoding,
-    Subshell(Rc<Error>),
+    Subshell(Box<Error>),
     SubshellExecution,
     CommandNotFound(PathBuf),
     CorruptPath,
-    LeftPipe(Rc<Error>),
-    RightPipe(Rc<Error>),
+    LeftPipe(Box<Error>),
+    RightPipe(Box<Error>),
     Pipe,
     Wait,
 }
@@ -107,12 +107,12 @@ impl Job {
                                             str_arguments.push(parts.join(" "));
                                         }
                                         Err(error) => {
-                                            return Err(Error::Subshell(Rc::new(error)));
+                                            return Err(Error::Subshell(Box::new(error)));
                                         }
                                     }
                                 },
                                 Err(error) => {
-                                    return Err(Error::Subshell(Rc::new(error)));
+                                    return Err(Error::Subshell(Box::new(error)));
                                 }
                             }
                         },
@@ -192,10 +192,10 @@ impl Job {
                             background: false
                         })
                     } else {
-                        Err(Error::RightPipe(Rc::new(second_result.unwrap_err())))
+                        Err(Error::RightPipe(Box::new(second_result.unwrap_err())))
                     }
                 } else {
-                    Err(Error::LeftPipe(Rc::new(first_result.unwrap_err())))
+                    Err(Error::LeftPipe(Box::new(first_result.unwrap_err())))
                 }
             }
         }
@@ -589,14 +589,14 @@ impl Job {
                                                     result = Ok(s);
                                                 },
                                                 Err(e) => {
-                                                    result = Err(Error::RightPipe(Rc::new(e)));
+                                                    result = Err(Error::RightPipe(Box::new(e)));
                                                 }
                                             };
                                         }
                                     }
                                 },
                                 Err(e) => {
-                                    result = Err(Error::LeftPipe(Rc::new(e)));
+                                    result = Err(Error::LeftPipe(Box::new(e)));
                                 }
                             };
                             if nix::unistd::close(input).is_ok() && nix::unistd::close(output).is_ok() {
