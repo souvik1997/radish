@@ -72,7 +72,12 @@ impl Drop for Job {
             Configuration::Command(_,_,_) => {
                 match self.get_status() {
                     Status::Started(pid, _, _) => {
-                        let _ = nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL);
+                        match nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGKILL) {
+                            Ok(_) => {
+                                eprintln!("warning: killed {} with SIGKILL", pid);
+                            },
+                            _ => {}
+                        }
                     },
                     _ => { }
                 }
@@ -303,6 +308,29 @@ impl Job {
             nix::unistd::tcsetpgrp(0, pgid).expect("failed to reset terminal group");
             nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &default_sigaction);
             nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &default_sigaction);
+        }
+    }
+
+    pub fn set_foreground(&self) {
+        match self.get_status() {
+            Status::NotStarted => {
+                panic!("cannot set foreground if job has not started");
+            },
+            Status::Started(_,pgid,_) => {
+                self.set_term_group(pgid);
+            }
+        }
+    }
+
+    pub fn in_foreground(&self) -> bool {
+        match self.get_status() {
+            Status::NotStarted => {
+                false
+            },
+            Status::Started(_,pgid,_) => {
+                let current_pgid = nix::unistd::tcgetpgrp(0).expect("failed to tcgetpgrp stdin");
+                pgid == current_pgid
+            }
         }
     }
 

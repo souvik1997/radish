@@ -80,7 +80,7 @@ impl ShellState {
                 match job.get_status() {
                     jobs::Status::NotStarted => {
                         match job.run(self) {
-                            Ok(_) => { },
+                            Ok(_) => { assert!(job.in_foreground()); },
                             Err(e) => {
                                 return Err(e);
                             }
@@ -88,6 +88,9 @@ impl ShellState {
                     }
                     jobs::Status::Started(pid, _, status) => {
                         self.current_job_pid.write().unwrap().set(Some(pid));
+                        if !job.in_foreground() {
+                            job.set_foreground();
+                        }
                         match status {
                             nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Continued(_) => {
                                 match job.wait(Some(nix::sys::wait::WUNTRACED)) {
@@ -249,7 +252,7 @@ impl jobs::BuiltinHandler for ShellState {
                         Some(pid_str) => { pid_str.parse().ok() }
                         None => {
                             if name == "bg" {
-                                max_job_pid(&bg_jobs)
+                                max_job_pid(&stopped_jobs)
                             } else {
                                 match max_job_pid(&bg_jobs) {
                                     Some(max_bg_pid) => {
@@ -275,7 +278,7 @@ impl jobs::BuiltinHandler for ShellState {
                     }
                 };
                 if let Some(pid) = pid {
-                    let job: jobs::Job;
+                    let mut job: jobs::Job;
                     match find_job_by_pid(&stopped_jobs, pid) {
                         Some(stopped_jobs_index) => {
                             job = stopped_jobs.remove(stopped_jobs_index);
@@ -297,7 +300,12 @@ impl jobs::BuiltinHandler for ShellState {
                             }
                         }
                     };
-                    self.foreground_jobs.write().unwrap().push(job);
+                    if name == "fg" {
+                        self.foreground_jobs.write().unwrap().push(job);
+                    } else {
+                        job.cont(true);
+                        bg_jobs.push(job);
+                    }
                     0
                 } else {
                     eprintln!("error: no such job");
