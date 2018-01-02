@@ -268,7 +268,7 @@ impl Job {
                             }
                         },
                         Configuration::Command(_,_,_) => {
-                            let result = nix::sys::signal::kill(pid, nix::sys::signal::SIGCONT);
+                            let result = nix::sys::signal::kill(-pgid, nix::sys::signal::SIGCONT);
                             match result {
                                 Ok(_) => {
                                     println!("cont: {}", pid);
