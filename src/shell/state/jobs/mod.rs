@@ -252,15 +252,15 @@ impl Job {
             match self.get_status() {
                 Status::Started(pid, pgid, nix::sys::wait::WaitStatus::Stopped(_, _)) => {
                     if !background {
-                        nix::unistd::tcsetpgrp(0, pgid).expect("failed to set terminal group");
+                        assert!(self.in_foreground());
                     }
                     match self.configuration {
                         Configuration::Builtin(_,_,_) => {
                             panic!("builtin should never be stopped");
                         },
                         Configuration::Pipeline(ref mut first, ref mut second) => {
-                            let first_result = first.cont(true);
-                            let second_result = second.cont(true);
+                            let first_result = first.cont(background);
+                            let second_result = second.cont(background);
                             let result = first_result.or(second_result);
                             match result {
                                 Ok(_) => {
