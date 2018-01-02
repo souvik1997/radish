@@ -12,15 +12,18 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::ops::DerefMut;
+use std::time;
 use std::process;
 use std::sync::RwLock;
+use std::sync::Arc;
+use std::thread;
 use nix;
 
 
 pub struct ShellState {
-    background_jobs: RwLock<Vec<jobs::Job>>,
-    foreground_jobs: RwLock<Vec<jobs::Job>>,
-    stopped_jobs: RwLock<Vec<jobs::Job>>,
+    background_jobs: Arc<RwLock<Vec<jobs::Job>>>,
+    foreground_jobs: Arc<RwLock<Vec<jobs::Job>>>,
+    stopped_jobs: Arc<RwLock<Vec<jobs::Job>>>,
     current_job_pid: RwLock<Cell<Option<nix::libc::pid_t>>>,
     pub ketos_interp: Interpreter,
 }
@@ -28,9 +31,9 @@ pub struct ShellState {
 impl ShellState {
     pub fn new() -> Self {
         ShellState {
-            background_jobs: RwLock::new(Vec::<jobs::Job>::new()),
-            foreground_jobs: RwLock::new(Vec::<jobs::Job>::new()),
-            stopped_jobs: RwLock::new(Vec::<jobs::Job>::new()),
+            background_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
+            foreground_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
+            stopped_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
             current_job_pid: RwLock::new(Cell::new(None)),
             ketos_interp: Interpreter::new()
         }
@@ -58,20 +61,23 @@ impl ShellState {
         }
     }
 
-    pub fn run_foreground_jobs(&mut self) -> Result<(), jobs::Error> {
-        fn get_next_job(queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
-            let mut foreground_jobs = queue.write().unwrap();
-            if foreground_jobs.len() > 0 {
-                let job = foreground_jobs.remove(0);
-                Some(job)
-            } else {
-                None
+    pub fn start_background_reaper(&self) -> thread::JoinHandle<()> {
+        let background_jobs = self.background_jobs.clone();
+        let stopped_jobs = self.stopped_jobs.clone();
+        thread::spawn(move || {
+            loop {
+                background_reaper(background_jobs.clone(), stopped_jobs.clone());
+                thread::sleep(time::Duration::from_millis(500));
             }
-        }
+        })
+    }
+
+
+    pub fn run_foreground_jobs(&mut self) -> Result<(), jobs::Error> {
         while let Some(mut job) = get_next_job(&self.foreground_jobs) {
             self.current_job_pid.write().unwrap().set(None);
             loop {
-                match job.status.get() {
+                match job.get_status() {
                     jobs::Status::NotStarted => {
                         match job.run(self) {
                             Ok(_) => { },
@@ -116,8 +122,7 @@ impl ShellState {
                                 panic!("ptraced job found in foreground queue");
                             },
                             nix::sys::wait::WaitStatus::Stopped(_,_) => {
-                                // bring job to foreground
-                                break;
+                                job.cont(false).expect("failed to SIGCONT job");
                             }
                         }
                     },
@@ -207,7 +212,7 @@ impl jobs::BuiltinHandler for ShellState {
             "fg" | "bg" => {
                 fn find_job_by_pid(jobs: &[jobs::Job], pid: nix::libc::pid_t) -> Option<usize> {
                     for (index, job) in jobs.iter().enumerate() {
-                        match job.status.get() {
+                        match job.get_status() {
                             jobs::Status::Started(job_pid, _, _) => {
                                 if job_pid == pid {
                                     return Some(index);
@@ -222,7 +227,7 @@ impl jobs::BuiltinHandler for ShellState {
                 fn max_job_pid(jobs: &[jobs::Job]) -> Option<nix::libc::pid_t> {
                     let mut max_pid = None;
                     for job in jobs {
-                        match job.status.get() {
+                        match job.get_status() {
                             jobs::Status::Started(job_pid, _, _) => {
                                 if max_pid.is_none() {
                                     max_pid = Some(job_pid);
@@ -330,6 +335,38 @@ impl jobs::BuiltinHandler for ShellState {
                     true
                 },
                 _ => { false }
+            }
+        }
+    }
+}
+
+fn get_next_job(queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
+    let mut foreground_jobs = queue.write().unwrap();
+    if foreground_jobs.len() > 0 {
+        let job = foreground_jobs.remove(0);
+        Some(job)
+    } else {
+        None
+    }
+}
+
+fn background_reaper(background_jobs: Arc<RwLock<Vec<jobs::Job>>>, stopped_jobs: Arc<RwLock<Vec<jobs::Job>>>) {
+    while let Some(mut job) = get_next_job(&background_jobs) {
+        match job.get_status() {
+            jobs::Status::NotStarted => {
+                panic!("found job in bg queue that has not been started");
+            },
+            jobs::Status::Started(pid, _, status) => {
+                match status {
+                    nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Continued(_) => {
+                        job.wait(Some(nix::sys::wait::WUNTRACED | nix::sys::wait::WNOHANG));
+                        background_jobs.write().unwrap().push(job);
+                    },
+                    nix::sys::wait::WaitStatus::Stopped(_,_) => {
+                        stopped_jobs.write().unwrap().push(job);
+                    }
+                    _ => {} // remove from queue
+                }
             }
         }
     }

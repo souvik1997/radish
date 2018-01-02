@@ -80,6 +80,7 @@ impl Shell {
             nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTSTP, &block_sigaction).expect("failed to ignore SIGSTP");
             nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGQUIT, &block_sigaction).expect("failed to ignore SIGQUIT");
         }
+        let reaper = state.start_background_reaper();
         loop {
             let input = state.readline();
             match input {
