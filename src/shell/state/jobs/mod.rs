@@ -230,30 +230,55 @@ impl Job {
     }
 
     pub fn cont(&mut self, background: bool) -> nix::Result<()> {
-        match self.get_status() {
-            Status::Started(pid, pgid, nix::sys::wait::WaitStatus::Stopped(_, _)) => {
-                match self.configuration {
-                    Configuration::Builtin(_,_,_) => {
-                        panic!("builtin should never be stopped");
-                    },
-                    Configuration::Pipeline(_,_) | Configuration::Command(_,_,_) => {
-                        if !background {
-                            self.set_term_group(pgid);
-                        }
-                        let result = nix::sys::signal::kill(-pgid, nix::sys::signal::SIGCONT);
-                        match result {
-                            Ok(_) => {
-                                self.set_status(Status::Started(pid, pgid, nix::sys::wait::WaitStatus::StillAlive))
-                            },
-                            _ => {}
-                        };
-                        result
+        let new_status = {
+            match self.get_status() {
+                Status::Started(pid, pgid, nix::sys::wait::WaitStatus::Stopped(_, _)) => {
+                    if !background {
+                        nix::unistd::tcsetpgrp(0, pgid).expect("failed to set terminal group");
                     }
+                    match self.configuration {
+                        Configuration::Builtin(_,_,_) => {
+                            panic!("builtin should never be stopped");
+                        },
+                        Configuration::Pipeline(ref mut first, ref mut second) => {
+                            let first_result = first.cont(true);
+                            let second_result = second.cont(true);
+                            let result = first_result.or(second_result);
+                            match result {
+                                Ok(_) => {
+                                    println!("finished continuing");
+                                    Ok(Status::Started(pid, pgid, nix::sys::wait::WaitStatus::StillAlive))
+                                },
+                                Err(e) => {
+                                    Err(e)
+                                }
+                            }
+                        },
+                        Configuration::Command(_,_,_) => {
+                            let result = nix::sys::signal::kill(pid, nix::sys::signal::SIGCONT);
+                            match result {
+                                Ok(_) => {
+                                    println!("cont: {}", pid);
+                                    Ok(Status::Started(pid, pgid, nix::sys::wait::WaitStatus::StillAlive))
+                                },
+                                Err(e) => {
+                                    Err(e)
+                                }
+                            }
+                        }
+                    }
+                },
+                s => {
+                    Ok(s)
                 }
-            },
-            _ => {
-                Err(nix::Error::from_errno(nix::Errno::EINVAL))
             }
+        };
+        match new_status {
+            Ok(s) => {
+                self.set_status(s);
+                Ok(())
+            },
+            Err(e) => { Err(e) }
         }
 
     }
@@ -301,12 +326,12 @@ impl Job {
                                     }
                                 }
                                 _ => {
-                                    Err(nix::Error::from_errno(nix::Errno::EINVAL))
+                                    Ok((status, Status::Started(pid, pgid, status)))
                                 }
                             }
                         },
                         Status::NotStarted => {
-                            Err(nix::Error::from_errno(nix::Errno::EINVAL))
+                            Err(nix::Error::from_errno(nix::Errno::ESRCH))
                         }
                     }
                 },
