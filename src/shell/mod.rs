@@ -5,6 +5,8 @@ use self::state::ShellState;
 use nom;
 use std::process;
 use nix;
+use std::io::stdin;
+use std::os::unix::io::AsRawFd;
 
 pub struct Shell {
     state: ShellState,
@@ -16,12 +18,12 @@ struct TerminalFgGroupManager {
 
 impl TerminalFgGroupManager {
     pub fn new(group: nix::libc::pid_t) -> Option<TerminalFgGroupManager> {
-        match nix::unistd::tcgetpgrp(0) {
+        match nix::unistd::tcgetpgrp(stdin().as_raw_fd()) {
             Ok(stdin_group) => {
                 let t = TerminalFgGroupManager {
                     stdin_group: stdin_group,
                 };
-                nix::unistd::tcsetpgrp(0, group);
+                nix::unistd::tcsetpgrp(stdin().as_raw_fd(), group).expect("failed to tcsetpgrp stdin");
                 Some(t)
             }
             Err(_) => None,
@@ -30,7 +32,7 @@ impl TerminalFgGroupManager {
 }
 impl Drop for TerminalFgGroupManager {
     fn drop(&mut self) {
-        nix::unistd::tcsetpgrp(0, self.stdin_group);
+        nix::unistd::tcsetpgrp(stdin().as_raw_fd(), self.stdin_group).expect("failed to reset tcsetpgrp");
     }
 }
 
@@ -43,7 +45,7 @@ impl ProcessGroupManager {
         match nix::unistd::getpgid(None) {
             Ok(pgid) => {
                 let t = ProcessGroupManager { group: pgid };
-                match nix::unistd::setpgid(0, group) {
+                match nix::unistd::setpgid(0 /* self */, group) {
                     Ok(_) => Some(t),
                     Err(_) => None,
                 }

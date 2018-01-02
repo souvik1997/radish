@@ -13,6 +13,8 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
+use std::io::{stdin, stdout};
+use std::os::unix::io::AsRawFd;
 use std::ops::Deref;
 use std::sync::{RwLock, RwLockReadGuard};
 extern crate glob;
@@ -251,34 +253,6 @@ impl Job {
                 }
             }
         }
-        /*
-        if let Ok(binary_cstring) = CString::new(binary) {
-            let mut args_cstring: Vec<CString> = Vec::new();
-            args_cstring.push(binary_cstring.clone());
-            for arg in args {
-                if let Ok(arg_cstring) = CString::new(*arg) {
-                    args_cstring.push(arg_cstring);
-                } else {
-                    return None;
-                }
-            }
-            if let Ok(fork_result) = nix::unistd::fork() {
-                match fork_result {
-                    nix::unistd::ForkResult::Parent{child} => {
-                        Some(Job{ pid: child })
-                    }
-                    nix::unistd::ForkResult::Child => {
-                        nix::unistd::execvp(&binary_cstring, &args_cstring);
-                        process::exit(-1);
-                    }
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-        */
     }
 
     pub fn cont(&mut self, background: bool) -> nix::Result<()> {
@@ -342,11 +316,11 @@ impl Job {
             nix::sys::signal::SigSet::empty(),
         );
         unsafe {
-            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &block_sigaction);
-            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &block_sigaction);
-            nix::unistd::tcsetpgrp(0, pgid).expect("failed to reset terminal group");
-            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &default_sigaction);
-            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &default_sigaction);
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &block_sigaction).expect("failed to block SIGTTOU");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &block_sigaction).expect("failed to block SIGTTIN");
+            nix::unistd::tcsetpgrp(stdin().as_raw_fd(), pgid).expect("failed to reset terminal group");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &default_sigaction).expect("failed to restore SIGTTOU");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &default_sigaction).expect("failed to restore SIGTTIN");
         }
     }
 
@@ -365,7 +339,7 @@ impl Job {
         match self.get_status() {
             Status::NotStarted => false,
             Status::Started(_, pgid, _) => {
-                let current_pgid = nix::unistd::tcgetpgrp(0).expect("failed to tcgetpgrp stdin");
+                let current_pgid = nix::unistd::tcgetpgrp(stdin().as_raw_fd()).expect("failed to tcgetpgrp stdin");
                 pgid == current_pgid
             }
         }
@@ -491,20 +465,20 @@ impl Job {
         ) -> (bool, Vec<(RawFd, RawFd, Option<RawFd>)>) {
             let mut log: Vec<(RawFd, RawFd, Option<RawFd>)> = Vec::new();
             if let Some(input) = input_fd {
-                match nix::unistd::dup(0) {
-                    Ok(saved) => log.push((0, saved, None)),
+                match nix::unistd::dup(stdin().as_raw_fd()) {
+                    Ok(saved) => log.push((stdin().as_raw_fd(), saved, None)),
                     Err(_) => return (false, log),
                 }
-                if let Err(_) = nix::unistd::dup2(input, 0) {
+                if let Err(_) = nix::unistd::dup2(input, stdin().as_raw_fd()) {
                     return (false, log);
                 }
             }
             if let Some(output) = output_fd {
-                match nix::unistd::dup(1) {
-                    Ok(saved) => log.push((1, saved, None)),
+                match nix::unistd::dup(stdout().as_raw_fd()) {
+                    Ok(saved) => log.push((stdout().as_raw_fd(), saved, None)),
                     Err(_) => return (false, log),
                 }
-                if let Err(_) = nix::unistd::dup2(output, 1) {
+                if let Err(_) = nix::unistd::dup2(output, stdout().as_raw_fd()) {
                     return (false, log);
                 }
             }
@@ -631,9 +605,9 @@ impl Job {
                                         nix::unistd::setpgid(child, child_pgid)
                                             .expect("failed to set process group for child");
                                         if !self.background {
-                                            if let Ok(existing_group) = nix::unistd::tcgetpgrp(0) {
+                                            if let Ok(existing_group) = nix::unistd::tcgetpgrp(stdin().as_raw_fd()) {
                                                 if existing_group != child_pgid {
-                                                    nix::unistd::tcsetpgrp(0, child_pgid)
+                                                    nix::unistd::tcsetpgrp(stdin().as_raw_fd(), child_pgid)
                                                         .expect("failed to tcsetpgrp stdin");
                                                 }
                                             }
@@ -654,12 +628,12 @@ impl Job {
                                         });
                                         if success {
                                             if let Some(child_pgid) = pgid {
-                                                nix::unistd::setpgid(0, child_pgid).expect(
+                                                nix::unistd::setpgid(0 /* self */, child_pgid).expect(
                                                     "failed to setpgid to child pgid in child",
                                                 );
                                             } else {
                                                 let child_pid = nix::unistd::getpid();
-                                                nix::unistd::setpgid(0, child_pid).expect(
+                                                nix::unistd::setpgid(0 /* self */, child_pid).expect(
                                                     "failed to setpgid to child pid in child",
                                                 );
                                                 //nix::unistd::setsid().expect("failed to create new session/process group in child");
