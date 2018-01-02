@@ -5,7 +5,7 @@ use std::os::unix::io::RawFd;
 #[derive(PartialEq, Debug, Clone)]
 pub enum Expr<'a> {
     Command(&'a [StringLiteralComponent<'a>], Vec<Argument<'a>>),
-    Pipeline(Rc<Expr<'a>>, Rc<Expr<'a>>)
+    Pipeline(Rc<Expr<'a>>, Rc<Expr<'a>>),
 }
 
 #[derive(PartialEq, Debug, Clone)]

@@ -60,8 +60,6 @@ named!(input_operator<&str, Token>,
        )
 );
 
-
-
 named!(operator<&str, Token>,
        alt_complete!(
            ws!(pipe_operator) |
@@ -98,7 +96,10 @@ enum State {
     BraceSplit,
 }
 
-fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token> where F: (Fn(char) -> bool) {
+fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token>
+where
+    F: Fn(char) -> bool,
+{
     let mut new_string_components: Vec<StringLiteralComponent> = Vec::new();
     let mut end_position = input.len();
     let mut state = State::Base;
@@ -115,30 +116,34 @@ fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token> where F: (Fn(
                 }
                 if c == '\\' {
                     if last_base < i {
-                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
+                        new_string_components
+                            .push(StringLiteralComponent::Literal(&input[last_base..i]));
                     }
                     state = State::Escaped;
                 }
                 if c == '$' {
                     if last_base < i {
-                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
+                        new_string_components
+                            .push(StringLiteralComponent::Literal(&input[last_base..i]));
                     }
                     state = State::ExpectVarOpen;
                 }
                 if c == '~' {
                     if last_base < i {
-                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
+                        new_string_components
+                            .push(StringLiteralComponent::Literal(&input[last_base..i]));
                     }
                     new_string_components.push(StringLiteralComponent::EnvVar("HOME"));
                     state = State::HomeExpansion;
                 }
                 if c == '{' {
                     if last_base < i {
-                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
+                        new_string_components
+                            .push(StringLiteralComponent::Literal(&input[last_base..i]));
                     }
                     state = State::BraceOpen;
                 }
-            },
+            }
             State::HomeExpansion => {
                 last_base = i;
                 state = State::Base;
@@ -146,14 +151,14 @@ fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token> where F: (Fn(
             State::Escaped => {
                 last_base = i;
                 state = State::Base;
-            },
+            }
             State::ExpectVarOpen => {
                 if c == '{' {
                     state = State::VarOpen;
                 } else {
-                    return IResult::Error(ErrorKind::IsNot)
+                    return IResult::Error(ErrorKind::IsNot);
                 }
-            },
+            }
             State::VarOpen => {
                 last_var = i;
                 state = State::InVar;
@@ -161,14 +166,14 @@ fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token> where F: (Fn(
             State::InVar => {
                 if c == '}' {
                     new_string_components.push(StringLiteralComponent::EnvVar(&input[last_var..i]));
-                    last_base = i+1;
+                    last_base = i + 1;
                     state = State::Base;
                 }
-            },
+            }
             State::BraceOpen => {
                 last_brace = i;
                 state = State::InBrace;
-            },
+            }
             State::InBrace => {
                 if c == ',' {
                     brace_components.push(&input[last_brace..i]);
@@ -178,26 +183,26 @@ fn match_string<F>(input: &str, filter: F) -> IResult<&str, Token> where F: (Fn(
                     brace_components.push(&input[last_brace..i]);
                     new_string_components.push(StringLiteralComponent::Brace(brace_components));
                     brace_components = Vec::new();
-                    last_base = i+1;
+                    last_base = i + 1;
                     state = State::Base;
                 }
-            },
+            }
             State::BraceSplit => {
                 last_brace = i;
                 state = State::InBrace;
-            },
+            }
         }
     }
     match state {
         State::Base => {
             if last_base < end_position {
-                new_string_components.push(StringLiteralComponent::Literal(&input[last_base..end_position]));
+                new_string_components.push(StringLiteralComponent::Literal(
+                    &input[last_base..end_position],
+                ));
             }
-        },
-        State::HomeExpansion => {},
-        _ => {
-            return IResult::Error(ErrorKind::IsNot)
         }
+        State::HomeExpansion => {}
+        _ => return IResult::Error(ErrorKind::IsNot),
     }
 
     let (head, tail) = input.split_at(end_position);
@@ -215,9 +220,7 @@ fn bare_string(input: &str) -> IResult<&str, Token> {
 }
 
 fn quoted_string_inner(input: &str) -> IResult<&str, Token> {
-    match_string(input, |c| {
-        c == '\"'
-    })
+    match_string(input, |c| c == '\"')
 }
 
 /*
@@ -250,7 +253,6 @@ named!(lex_one<&str, Token>,
 named!(lex_all<&str, Vec<Token>>,
        ws!(many0!(lex_one))
 );
-
 
 pub fn lex<'a>(s: &'a str) -> IResult<&str, Vec<Token<'a>>> {
     lex_all(s)

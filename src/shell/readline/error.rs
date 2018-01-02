@@ -29,7 +29,7 @@ impl fmt::Display for ReadlineError {
             ReadlineError::Eof => write!(f, "EOF"),
             ReadlineError::Interrupted => write!(f, "Interrupted"),
             ReadlineError::Char(ref err) => err.fmt(f),
-            ReadlineError::Errno(ref err) => write!(f, "Errno: {}", err.errno().desc())
+            ReadlineError::Errno(ref err) => write!(f, "Errno: {}", err.errno().desc()),
         }
     }
 }

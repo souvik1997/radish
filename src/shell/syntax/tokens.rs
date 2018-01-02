@@ -5,7 +5,7 @@ pub enum Token<'a> {
     StringLiteral(Vec<StringLiteralComponent<'a>>),
     Pipe,
     Redirect(RawFd),
-    RedirectFD(RawFd,RawFd),
+    RedirectFD(RawFd, RawFd),
     Append(RawFd),
     RedirectAll,
     AppendAll,

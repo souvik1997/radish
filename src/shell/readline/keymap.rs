@@ -49,10 +49,13 @@ pub enum Cmd {
 impl Cmd {
     pub fn should_reset_kill_ring(&self) -> bool {
         match *self {
-            Cmd::Kill(Movement::BackwardChar(_)) |
-            Cmd::Kill(Movement::ForwardChar(_)) => true,
-            Cmd::ClearScreen | Cmd::Kill(_) | Cmd::Noop | Cmd::Suspend | Cmd::Yank(_, _) |
-            Cmd::YankPop => false,
+            Cmd::Kill(Movement::BackwardChar(_)) | Cmd::Kill(Movement::ForwardChar(_)) => true,
+            Cmd::ClearScreen
+            | Cmd::Kill(_)
+            | Cmd::Noop
+            | Cmd::Suspend
+            | Cmd::Yank(_, _)
+            | Cmd::YankPop => false,
             _ => true,
         }
     }
@@ -144,7 +147,6 @@ impl CharSearch {
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Movement {
     WholeLine, // not really a movement
@@ -231,8 +233,7 @@ impl EditState {
         loop {
             let key = try!(rdr.next_key());
             match key {
-                KeyPress::Char(digit @ '0'...'9') |
-                KeyPress::Meta(digit @ '0'...'9') => {
+                KeyPress::Char(digit @ '0'...'9') | KeyPress::Meta(digit @ '0'...'9') => {
                     if self.num_args == -1 {
                         self.num_args *= digit.to_digit(10).unwrap() as i16;
                     } else {
@@ -257,10 +258,10 @@ impl EditState {
         if let Some(cmd) = self.custom_bindings.borrow().get(&key) {
             debug!(target: "rustyline", "Custom command: {:?}", cmd);
             return Ok(if cmd.is_repeatable() {
-                          cmd.redo(Some(n))
-                      } else {
-                          cmd.clone()
-                      });
+                cmd.redo(Some(n))
+            } else {
+                cmd.clone()
+            });
         }
         let cmd = match key {
             KeyPress::Char(c) => {
@@ -286,10 +287,8 @@ impl EditState {
                     Cmd::Move(Movement::BackwardChar(n))
                 }
             }
-            KeyPress::Ctrl('G') |
-            KeyPress::Esc => Cmd::Abort,
-            KeyPress::Ctrl('H') |
-            KeyPress::Backspace => {
+            KeyPress::Ctrl('G') | KeyPress::Esc => Cmd::Abort,
+            KeyPress::Ctrl('H') | KeyPress::Backspace => {
                 if positive {
                     Cmd::Kill(Movement::BackwardChar(n))
                 } else {
@@ -307,8 +306,7 @@ impl EditState {
             KeyPress::Ctrl('L') => Cmd::ClearScreen,
             KeyPress::Ctrl('N') => Cmd::NextHistory,
             KeyPress::Ctrl('P') => Cmd::PreviousHistory,
-            KeyPress::Meta('\x08') |
-            KeyPress::Meta('\x7f') => {
+            KeyPress::Meta('\x08') | KeyPress::Meta('\x7f') => {
                 if positive {
                     Cmd::Kill(Movement::BackwardWord(n, Word::Emacs))
                 } else {
@@ -374,14 +372,14 @@ impl EditState {
         if let Some(cmd) = self.custom_bindings.borrow().get(&key) {
             debug!(target: "rustyline", "Custom command: {:?}", cmd);
             return Ok(if cmd.is_repeatable() {
-                          if no_num_args {
-                              cmd.redo(None)
-                          } else {
-                              cmd.redo(Some(n))
-                          }
-                      } else {
-                          cmd.clone()
-                      });
+                if no_num_args {
+                    cmd.redo(None)
+                } else {
+                    cmd.redo(Some(n))
+                }
+            } else {
+                cmd.clone()
+            });
         }
         let cmd = match key {
             KeyPress::Char('$') |
@@ -530,15 +528,14 @@ impl EditState {
         if let Some(cmd) = self.custom_bindings.borrow().get(&key) {
             debug!(target: "rustyline", "Custom command: {:?}", cmd);
             return Ok(if cmd.is_repeatable() {
-                          cmd.redo(None)
-                      } else {
-                          cmd.clone()
-                      });
+                cmd.redo(None)
+            } else {
+                cmd.clone()
+            });
         }
         let cmd = match key {
             KeyPress::Char(c) => Cmd::SelfInsert(1, c),
-            KeyPress::Ctrl('H') |
-            KeyPress::Backspace => Cmd::Kill(Movement::BackwardChar(1)),
+            KeyPress::Ctrl('H') | KeyPress::Backspace => Cmd::Kill(Movement::BackwardChar(1)),
             KeyPress::Tab => Cmd::Complete,
             KeyPress::Esc => {
                 // vi-movement-mode/vi-command-mode: Vi enter command mode (use alternative key bindings).
@@ -558,11 +555,12 @@ impl EditState {
         Ok(cmd)
     }
 
-    fn vi_cmd_motion<R: RawReader>(&mut self,
-                                   rdr: &mut R,
-                                   key: KeyPress,
-                                   n: RepeatCount)
-                                   -> Result<Option<Movement>> {
+    fn vi_cmd_motion<R: RawReader>(
+        &mut self,
+        rdr: &mut R,
+        key: KeyPress,
+        n: RepeatCount,
+    ) -> Result<Option<Movement>> {
         let mut mvt = try!(rdr.next_key());
         if mvt == key {
             return Ok(Some(Movement::WholeLine));
@@ -574,76 +572,72 @@ impl EditState {
             n = self.vi_num_args().saturating_mul(n);
         }
         Ok(match mvt {
-               KeyPress::Char('$') => Some(Movement::EndOfLine), // vi-change-to-eol: Vi change to end of line.
-               KeyPress::Char('0') => Some(Movement::BeginningOfLine), // vi-kill-line-prev: Vi cut from beginning of line to cursor.
-               KeyPress::Char('^') => Some(Movement::ViFirstPrint),
-               KeyPress::Char('b') => Some(Movement::BackwardWord(n, Word::Vi)),
-               KeyPress::Char('B') => Some(Movement::BackwardWord(n, Word::Big)),
-               KeyPress::Char('e') => Some(Movement::ForwardWord(n, At::AfterEnd, Word::Vi)),
-               KeyPress::Char('E') => Some(Movement::ForwardWord(n, At::AfterEnd, Word::Big)),
-               KeyPress::Char(c) if c == 'f' || c == 'F' || c == 't' || c == 'T' => {
-            let cs = try!(self.vi_char_search(rdr, c));
-            match cs {
-                Some(cs) => Some(Movement::ViCharSearch(n, cs)),
+            KeyPress::Char('$') => Some(Movement::EndOfLine), // vi-change-to-eol: Vi change to end of line.
+            KeyPress::Char('0') => Some(Movement::BeginningOfLine), // vi-kill-line-prev: Vi cut from beginning of line to cursor.
+            KeyPress::Char('^') => Some(Movement::ViFirstPrint),
+            KeyPress::Char('b') => Some(Movement::BackwardWord(n, Word::Vi)),
+            KeyPress::Char('B') => Some(Movement::BackwardWord(n, Word::Big)),
+            KeyPress::Char('e') => Some(Movement::ForwardWord(n, At::AfterEnd, Word::Vi)),
+            KeyPress::Char('E') => Some(Movement::ForwardWord(n, At::AfterEnd, Word::Big)),
+            KeyPress::Char(c) if c == 'f' || c == 'F' || c == 't' || c == 'T' => {
+                let cs = try!(self.vi_char_search(rdr, c));
+                match cs {
+                    Some(cs) => Some(Movement::ViCharSearch(n, cs)),
+                    None => None,
+                }
+            }
+            KeyPress::Char(';') => match self.last_char_search {
+                Some(ref cs) => Some(Movement::ViCharSearch(n, cs.clone())),
                 None => None,
+            },
+            KeyPress::Char(',') => match self.last_char_search {
+                Some(ref cs) => Some(Movement::ViCharSearch(n, cs.opposite())),
+                None => None,
+            },
+            KeyPress::Char('h') | KeyPress::Ctrl('H') | KeyPress::Backspace => {
+                Some(Movement::BackwardChar(n))
+            } // vi-delete-prev-char: Vi move to previous character (backspace).
+            KeyPress::Char('l') | KeyPress::Char(' ') => Some(Movement::ForwardChar(n)),
+            KeyPress::Char('w') => {
+                // 'cw' is 'ce'
+                if key == KeyPress::Char('c') {
+                    Some(Movement::ForwardWord(n, At::AfterEnd, Word::Vi))
+                } else {
+                    Some(Movement::ForwardWord(n, At::Start, Word::Vi))
+                }
             }
-        }
-               KeyPress::Char(';') => {
-                   match self.last_char_search {
-                       Some(ref cs) => Some(Movement::ViCharSearch(n, cs.clone())),
-                       None => None,
-                   }
-               }
-               KeyPress::Char(',') => {
-                   match self.last_char_search {
-                       Some(ref cs) => Some(Movement::ViCharSearch(n, cs.opposite())),
-                       None => None,
-                   }
-               }
-               KeyPress::Char('h') |
-               KeyPress::Ctrl('H') |
-               KeyPress::Backspace => Some(Movement::BackwardChar(n)), // vi-delete-prev-char: Vi move to previous character (backspace).
-               KeyPress::Char('l') |
-               KeyPress::Char(' ') => Some(Movement::ForwardChar(n)),
-               KeyPress::Char('w') => {
-            // 'cw' is 'ce'
-            if key == KeyPress::Char('c') {
-                Some(Movement::ForwardWord(n, At::AfterEnd, Word::Vi))
-            } else {
-                Some(Movement::ForwardWord(n, At::Start, Word::Vi))
+            KeyPress::Char('W') => {
+                // 'cW' is 'cE'
+                if key == KeyPress::Char('c') {
+                    Some(Movement::ForwardWord(n, At::AfterEnd, Word::Big))
+                } else {
+                    Some(Movement::ForwardWord(n, At::Start, Word::Big))
+                }
             }
-        }
-               KeyPress::Char('W') => {
-            // 'cW' is 'cE'
-            if key == KeyPress::Char('c') {
-                Some(Movement::ForwardWord(n, At::AfterEnd, Word::Big))
-            } else {
-                Some(Movement::ForwardWord(n, At::Start, Word::Big))
-            }
-        }
-               _ => None,
-           })
+            _ => None,
+        })
     }
 
-    fn vi_char_search<R: RawReader>(&mut self,
-                                    rdr: &mut R,
-                                    cmd: char)
-                                    -> Result<Option<CharSearch>> {
+    fn vi_char_search<R: RawReader>(
+        &mut self,
+        rdr: &mut R,
+        cmd: char,
+    ) -> Result<Option<CharSearch>> {
         let ch = try!(rdr.next_key());
         Ok(match ch {
-               KeyPress::Char(ch) => {
-            let cs = match cmd {
-                'f' => CharSearch::Forward(ch),
-                't' => CharSearch::ForwardBefore(ch),
-                'F' => CharSearch::Backward(ch),
-                'T' => CharSearch::BackwardAfter(ch),
-                _ => unreachable!(),
-            };
-            self.last_char_search = Some(cs.clone());
-            Some(cs)
-        }
-               _ => None,
-           })
+            KeyPress::Char(ch) => {
+                let cs = match cmd {
+                    'f' => CharSearch::Forward(ch),
+                    't' => CharSearch::ForwardBefore(ch),
+                    'F' => CharSearch::Backward(ch),
+                    'T' => CharSearch::BackwardAfter(ch),
+                    _ => unreachable!(),
+                };
+                self.last_char_search = Some(cs.clone());
+                Some(cs)
+            }
+            _ => None,
+        })
     }
 
     fn common(&mut self, key: KeyPress, n: RepeatCount, positive: bool) -> Cmd {

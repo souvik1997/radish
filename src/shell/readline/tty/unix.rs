@@ -51,7 +51,6 @@ fn is_unsupported_term() -> bool {
     }
 }
 
-
 /// Return whether or not STDIN, STDOUT or STDERR is a TTY
 fn is_a_tty(fd: libc::c_int) -> bool {
     unsafe { libc::isatty(fd) != 0 }
@@ -75,9 +74,11 @@ impl Read for StdinRaw {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let res = unsafe {
-                libc::read(STDIN_FILENO,
-                           buf.as_mut_ptr() as *mut libc::c_void,
-                           buf.len() as libc::size_t)
+                libc::read(
+                    STDIN_FILENO,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len() as libc::size_t,
+                )
             };
             if res == -1 {
                 let error = io::Error::last_os_error();
@@ -101,9 +102,9 @@ impl PosixRawReader {
     pub fn new(config: &Config) -> Result<PosixRawReader> {
         let stdin = StdinRaw {};
         Ok(PosixRawReader {
-               chars: char_iter::chars(stdin),
-               timeout_ms: config.keyseq_timeout(),
-           })
+            chars: char_iter::chars(stdin),
+            timeout_ms: config.keyseq_timeout(),
+        })
     }
 
     fn escape_sequence(&mut self) -> Result<KeyPress> {
@@ -117,73 +118,77 @@ impl PosixRawReader {
                 let seq3 = try!(self.next_char());
                 if seq3 == '~' {
                     Ok(match seq2 {
-                           '1' | '7' => KeyPress::Home, // '1': xterm
-                           '3' => KeyPress::Delete,
-                           '4' | '8' => KeyPress::End, // '4': xterm
-                           '5' => KeyPress::PageUp,
-                           '6' => KeyPress::PageDown,
-                           _ => {
-                        debug!(target: "rustyline", "unsupported esc sequence: ESC{:?}{:?}{:?}", seq1, seq2, seq3);
-                        KeyPress::UnknownEscSeq
-                    }
-                       })
+                        '1' | '7' => KeyPress::Home, // '1': xterm
+                        '3' => KeyPress::Delete,
+                        '4' | '8' => KeyPress::End, // '4': xterm
+                        '5' => KeyPress::PageUp,
+                        '6' => KeyPress::PageDown,
+                        _ => {
+                            debug!(target: "rustyline",
+                                   "unsupported esc sequence: ESC{:?}{:?}{:?}", seq1, seq2, seq3);
+                            KeyPress::UnknownEscSeq
+                        }
+                    })
                 } else {
-                    debug!(target: "rustyline", "unsupported esc sequence: ESC{:?}{:?}{:?}", seq1, seq2, seq3);
+                    debug!(target: "rustyline",
+                           "unsupported esc sequence: ESC{:?}{:?}{:?}", seq1, seq2, seq3);
                     Ok(KeyPress::UnknownEscSeq)
                 }
             } else {
                 Ok(match seq2 {
-                       'A' => KeyPress::Up, // ANSI
-                       'B' => KeyPress::Down,
-                       'C' => KeyPress::Right,
-                       'D' => KeyPress::Left,
-                       'F' => KeyPress::End,
-                       'H' => KeyPress::Home,
-                       _ => {
-                    debug!(target: "rustyline", "unsupported esc sequence: ESC{:?}{:?}", seq1, seq2);
-                    KeyPress::UnknownEscSeq
-                }
-                   })
+                    'A' => KeyPress::Up, // ANSI
+                    'B' => KeyPress::Down,
+                    'C' => KeyPress::Right,
+                    'D' => KeyPress::Left,
+                    'F' => KeyPress::End,
+                    'H' => KeyPress::Home,
+                    _ => {
+                        debug!(target: "rustyline",
+                               "unsupported esc sequence: ESC{:?}{:?}", seq1, seq2);
+                        KeyPress::UnknownEscSeq
+                    }
+                })
             }
         } else if seq1 == 'O' {
             // ESC O sequences.
             let seq2 = try!(self.next_char());
             Ok(match seq2 {
-                   'A' => KeyPress::Up,
-                   'B' => KeyPress::Down,
-                   'C' => KeyPress::Right,
-                   'D' => KeyPress::Left,
-                   'F' => KeyPress::End,
-                   'H' => KeyPress::Home,
-                   _ => {
-                debug!(target: "rustyline", "unsupported esc sequence: ESC{:?}{:?}", seq1, seq2);
-                KeyPress::UnknownEscSeq
-            }
-               })
+                'A' => KeyPress::Up,
+                'B' => KeyPress::Down,
+                'C' => KeyPress::Right,
+                'D' => KeyPress::Left,
+                'F' => KeyPress::End,
+                'H' => KeyPress::Home,
+                _ => {
+                    debug!(target: "rustyline",
+                           "unsupported esc sequence: ESC{:?}{:?}", seq1, seq2);
+                    KeyPress::UnknownEscSeq
+                }
+            })
         } else {
             // TODO ESC-R (r): Undo all changes made to this line.
             Ok(match seq1 {
-                   '\x08' => KeyPress::Meta('\x08'), // Backspace
-                   '-' => KeyPress::Meta('-'),
-                   '0'...'9' => KeyPress::Meta(seq1),
-                   '<' => KeyPress::Meta('<'),
-                   '>' => KeyPress::Meta('>'),
-                   'b' | 'B' => KeyPress::Meta('B'),
-                   'c' | 'C' => KeyPress::Meta('C'),
-                   'd' | 'D' => KeyPress::Meta('D'),
-                   'f' | 'F' => KeyPress::Meta('F'),
-                   'l' | 'L' => KeyPress::Meta('L'),
-                   'n' | 'N' => KeyPress::Meta('N'),
-                   'p' | 'P' => KeyPress::Meta('P'),
-                   't' | 'T' => KeyPress::Meta('T'),
-                   'u' | 'U' => KeyPress::Meta('U'),
-                   'y' | 'Y' => KeyPress::Meta('Y'),
-                   '\x7f' => KeyPress::Meta('\x7f'), // Delete
-                   _ => {
-                debug!(target: "rustyline", "unsupported esc sequence: M-{:?}", seq1);
-                KeyPress::UnknownEscSeq
-            }
-               })
+                '\x08' => KeyPress::Meta('\x08'), // Backspace
+                '-' => KeyPress::Meta('-'),
+                '0'...'9' => KeyPress::Meta(seq1),
+                '<' => KeyPress::Meta('<'),
+                '>' => KeyPress::Meta('>'),
+                'b' | 'B' => KeyPress::Meta('B'),
+                'c' | 'C' => KeyPress::Meta('C'),
+                'd' | 'D' => KeyPress::Meta('D'),
+                'f' | 'F' => KeyPress::Meta('F'),
+                'l' | 'L' => KeyPress::Meta('L'),
+                'n' | 'N' => KeyPress::Meta('N'),
+                'p' | 'P' => KeyPress::Meta('P'),
+                't' | 'T' => KeyPress::Meta('T'),
+                'u' | 'U' => KeyPress::Meta('U'),
+                'y' | 'Y' => KeyPress::Meta('Y'),
+                '\x7f' => KeyPress::Meta('\x7f'), // Delete
+                _ => {
+                    debug!(target: "rustyline", "unsupported esc sequence: M-{:?}", seq1);
+                    KeyPress::UnknownEscSeq
+                }
+            })
         }
     }
 }
@@ -194,8 +199,9 @@ impl RawReader for PosixRawReader {
 
         let mut key = consts::char_to_key_press(c);
         if key == KeyPress::Esc {
-            let mut fds =
-                [poll::PollFd::new(STDIN_FILENO, poll::POLLIN, poll::EventFlags::empty())];
+            let mut fds = [
+                poll::PollFd::new(STDIN_FILENO, poll::POLLIN, poll::EventFlags::empty()),
+            ];
             match poll::poll(&mut fds, self.timeout_ms) {
                 Ok(n) if n == 0 => {
                     // single escape
@@ -220,15 +226,16 @@ impl RawReader for PosixRawReader {
     }
 }
 
-
 static SIGWINCH_ONCE: sync::Once = sync::ONCE_INIT;
 static SIGWINCH: atomic::AtomicBool = atomic::ATOMIC_BOOL_INIT;
 
 fn install_sigwinch_handler() {
     SIGWINCH_ONCE.call_once(|| unsafe {
-        let sigwinch = signal::SigAction::new(signal::SigHandler::Handler(sigwinch_handler),
-                                              signal::SaFlags::empty(),
-                                              signal::SigSet::empty());
+        let sigwinch = signal::SigAction::new(
+            signal::SigHandler::Handler(sigwinch_handler),
+            signal::SaFlags::empty(),
+            signal::SigSet::empty(),
+        );
         let _ = signal::sigaction(signal::SIGWINCH, &sigwinch);
     });
 }
@@ -240,7 +247,7 @@ extern "C" fn sigwinch_handler(_: libc::c_int) {
 
 pub type Terminal = PosixTerminal;
 
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub struct PosixTerminal {
     unsupported: bool,
     stdin_isatty: bool,
@@ -292,8 +299,8 @@ impl Term for PosixTerminal {
 
     fn enable_raw_mode(&self) -> Result<Mode> {
         use self::nix::errno::Errno::ENOTTY;
-        use self::nix::sys::termios::{BRKINT, CS8, ECHO, ICANON, ICRNL, IEXTEN, INPCK, ISIG, ISTRIP,
-                                IXON, /* OPOST, */ VMIN, VTIME};
+        use self::nix::sys::termios::{CS8, BRKINT, ECHO, ICANON, ICRNL, IEXTEN, INPCK, ISIG,
+                                      ISTRIP, IXON, /* OPOST, */ VMIN, VTIME};
         if !self.stdin_isatty {
             try!(Err(self::nix::Error::from_errno(ENOTTY)));
         }
@@ -305,7 +312,7 @@ impl Term for PosixTerminal {
         // we don't want raw output, it turns newlines into straight linefeeds
         // raw.c_oflag = raw.c_oflag & !(OPOST); // disable all output processing
         raw.c_cflag |= CS8; // character-size mark (8 bits)
-        // disable echoing, canonical mode, extended input processing and signals
+                            // disable echoing, canonical mode, extended input processing and signals
         raw.c_lflag &= !(ECHO | ICANON | IEXTEN | ISIG);
         raw.c_cc[VMIN] = 1; // One character-at-a-time input
         raw.c_cc[VTIME] = 0; // with blocking read
@@ -343,7 +350,7 @@ pub fn suspend() -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(unix,test))]
+#[cfg(all(unix, test))]
 mod test {
     #[test]
     fn test_unsupported_term() {

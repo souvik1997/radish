@@ -10,7 +10,8 @@ use std::io::Read;
 use std::str;
 
 pub fn chars<R: Read>(read: R) -> Chars<R>
-    where R: Sized
+where
+    R: Sized,
 {
     Chars { inner: read }
 }
@@ -80,9 +81,9 @@ impl<R: Read> Iterator for Chars<R> {
             }
         }
         Some(match str::from_utf8(&buf[..width]).ok() {
-                 Some(s) => Ok(s.chars().next().unwrap()),
-                 None => Err(CharsError::NotUtf8),
-             })
+            Some(s) => Ok(s.chars().next().unwrap()),
+            None => Err(CharsError::NotUtf8),
+        })
     }
 }
 
