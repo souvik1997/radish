@@ -259,7 +259,6 @@ impl Job {
                             let result = first_result.or(second_result);
                             match result {
                                 Ok(_) => {
-                                    println!("finished continuing");
                                     Ok(Status::Started(pid, pgid, nix::sys::wait::WaitStatus::StillAlive))
                                 },
                                 Err(e) => {
@@ -271,7 +270,6 @@ impl Job {
                             let result = nix::sys::signal::kill(-pgid, nix::sys::signal::SIGCONT);
                             match result {
                                 Ok(_) => {
-                                    println!("cont: {}", pid);
                                     Ok(Status::Started(pid, pgid, nix::sys::wait::WaitStatus::StillAlive))
                                 },
                                 Err(e) => {
