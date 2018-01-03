@@ -6,10 +6,6 @@ extern crate nom;
 
 extern crate nix;
 
-extern crate ketos;
-#[macro_use]
-extern crate ketos_derive;
-
 mod shell;
 
 use std::process;

@@ -94,45 +94,38 @@ impl Shell {
             match input {
                 Ok(command) => {
                     let trimmed = command.trim();
-                    if trimmed.starts_with("(") {
-                        match state.ketos_interp.run_code(trimmed, None) {
-                            Ok(value) => state.ketos_interp.display_value(&value),
-                            Err(error) => println!("error: {}", error),
-                        }
-                    } else {
-                        match syntax::lexer::lex(&command) {
-                            nom::IResult::Done(remaining, tokens) => {
-                                if remaining.len() == 0 {
-                                    //println!("lexed: {:?}", tokens);
-                                    match syntax::parser::parse(&tokens) {
-                                        Ok(expr) => match state.enqueue_job(&expr) {
-                                            Ok(()) => {
-                                                state.run_foreground_jobs();
-                                            }
-                                            Err(error) => {
-                                                println!(
-                                                    "error when constructing job: {:?}",
-                                                    error
-                                                );
-                                            }
-                                        },
-                                        Err(error) => {
-                                            println!("syntax error: {:?}", error);
+                    match syntax::lexer::lex(&trimmed) {
+                        nom::IResult::Done(remaining, tokens) => {
+                            if remaining.len() == 0 {
+                                //println!("lexed: {:?}", tokens);
+                                match syntax::parser::parse(&tokens) {
+                                    Ok(expr) => match state.enqueue_job(&expr) {
+                                        Ok(()) => {
+                                            state.run_foreground_jobs();
                                         }
+                                        Err(error) => {
+                                            println!(
+                                                "error when constructing job: {:?}",
+                                                error
+                                            );
+                                        }
+                                    },
+                                    Err(error) => {
+                                        println!("syntax error: {:?}", error);
                                     }
-                                } else {
-                                    println!("syntax error: extraneous characters `{}`", remaining);
                                 }
+                            } else {
+                                println!("syntax error: extraneous characters `{}`", remaining);
                             }
-                            nom::IResult::Error(error) => {
-                                println!("lex error: {:?}", error);
-                            }
-                            nom::IResult::Incomplete(nom::Needed::Unknown) => {
-                                println!("lex error: incomplete input");
-                            }
-                            nom::IResult::Incomplete(nom::Needed::Size(remaining)) => {
-                                println!("lex error: incomplete input, remaining: {}", remaining);
-                            }
+                        }
+                        nom::IResult::Error(error) => {
+                            println!("lex error: {:?}", error);
+                        }
+                        nom::IResult::Incomplete(nom::Needed::Unknown) => {
+                            println!("lex error: incomplete input");
+                        }
+                        nom::IResult::Incomplete(nom::Needed::Size(remaining)) => {
+                            println!("lex error: incomplete input, remaining: {}", remaining);
                         }
                     }
                 }

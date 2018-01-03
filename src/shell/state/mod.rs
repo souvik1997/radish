@@ -4,8 +4,6 @@ use std::env;
 extern crate ansi_term;
 extern crate users;
 use self::ansi_term::Colour;
-extern crate ketos;
-use ketos::Interpreter;
 pub mod jobs;
 use std::cell::Cell;
 use std::path::PathBuf;
@@ -18,13 +16,15 @@ use std::sync::RwLock;
 use std::sync::Arc;
 use std::thread;
 use nix;
+extern crate rlua;
+use self::rlua::Lua;
 
 pub struct ShellState {
     background_jobs: Arc<RwLock<Vec<jobs::Job>>>,
     foreground_jobs: Arc<RwLock<Vec<jobs::Job>>>,
     stopped_jobs: Arc<RwLock<Vec<jobs::Job>>>,
     current_job_pid: RwLock<Cell<Option<nix::libc::pid_t>>>,
-    pub ketos_interp: Interpreter,
+    lua: RwLock<Lua>
 }
 
 impl ShellState {
@@ -34,7 +34,7 @@ impl ShellState {
             foreground_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
             stopped_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
             current_job_pid: RwLock::new(Cell::new(None)),
-            ketos_interp: Interpreter::new(),
+            lua: RwLock::new(Lua::new())
         }
     }
 
@@ -311,40 +311,15 @@ impl jobs::BuiltinHandler for ShellState {
                 }
             }
             _ => {
-                let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
-                if let Some(value) = self.ketos_interp.scope().get_value(ketos_name) {
-                    let result = self.ketos_interp.call_value(
-                        value,
-                        args.into_iter()
-                            .map(|s| ketos::Value::String(ketos::rc_vec::RcString::new(s.clone())))
-                            .collect(),
-                    );
-                    match result {
-                        Ok(val) => {
-                            self.ketos_interp.display_value(&val);
-                            0
-                        }
-                        Err(error) => {
-                            println!("error: {:?}", error);
-                            -1
-                        }
-                    }
-                } else {
-                    -1
-                }
+                -1
             }
         }
     }
 
     fn is_builtin(&mut self, name: &str) -> bool {
-        let ketos_name = self.ketos_interp.scope().borrow_names_mut().add(name);
-        if let Some(_) = self.ketos_interp.scope().get_value(ketos_name) {
-            true
-        } else {
-            match name {
-                "cd" | "echo" | "echo-stderr" | "exit" | "set" | "jobs" | "fg" | "bg" => true,
-                _ => false,
-            }
+        match name {
+            "cd" | "echo" | "echo-stderr" | "exit" | "set" | "jobs" | "fg" | "bg" => true,
+            _ => false,
         }
     }
 }
