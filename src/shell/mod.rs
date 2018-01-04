@@ -1,7 +1,11 @@
 mod readline;
 mod syntax;
 mod state;
+mod completion;
+mod history;
 use self::state::ShellState;
+use self::history::History;
+use self::completion::Completer;
 use nom;
 use std::process;
 use nix;
@@ -69,6 +73,9 @@ impl Shell {
     }
 
     pub fn run_interactive(&mut self) -> i8 {
+        let mut rl = readline::Readline::new();
+        let history = History::new();
+        let completer = Completer::new(&history);
         let state = &mut self.state;
         let pid = nix::unistd::getpid();
         let _process_group_manager =
@@ -90,9 +97,9 @@ impl Shell {
         }
         let reaper = state.start_background_reaper();
         loop {
-            let input = state.readline();
+            let input = rl.read(&completer, &history);
             match input {
-                Ok(command) => {
+                Some(command) => {
                     let trimmed = command.trim();
                     match syntax::lexer::lex(&trimmed) {
                         nom::IResult::Done(remaining, tokens) => {
@@ -129,13 +136,8 @@ impl Shell {
                         }
                     }
                 }
-                Err(readline::error::ReadlineError::Eof) => {
+                None => {
                     return 0;
-                }
-                Err(readline::error::ReadlineError::Interrupted) => {}
-                Err(e) => {
-                    println!("input error: {:?}", e);
-                    return -1;
                 }
             }
         }

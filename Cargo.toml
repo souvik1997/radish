@@ -15,6 +15,11 @@ users = "^0.6.0"
 ansi_term = "0.9"
 rlua = "^0.10.2"
 glob = "^0.2.11"
+termion = "^1.5.1"
+lazy_static = "^1.0.0"
+bitflags = "^1.0.1"
+unicode-normalization = "0.1.5"
+bytecount = "0.1"
 
- [dev-dependencies]
- tempdir = "0.3.4"
+[dev-dependencies]
+tempdir = "0.3.4"

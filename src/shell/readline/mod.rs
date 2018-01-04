@@ -1,1241 +1,330 @@
-//! Readline for Rust
-//!
-//! This implementation is based on [Antirez's Linenoise](https://github.com/antirez/linenoise)
-//!
-//! # Example
-//!
-//! Usage
-//!
-//! ```
-//! let mut rl = rustyline::Editor::<()>::new();
-//! let readline = rl.readline(">> ");
-//! match readline {
-//!     Ok(line) => println!("Line: {:?}",line),
-//!     Err(_)   => println!("No input"),
-//! }
-//! ```
-#![allow(unknown_lints)]
-
-extern crate encode_unicode;
+extern crate termion;
 extern crate nix;
-extern crate unicode_segmentation;
-extern crate unicode_width;
-
-pub mod delegate;
-mod consts;
-pub mod error;
-pub mod history;
-mod keymap;
-mod kill_ring;
-pub mod line_buffer;
-#[cfg(unix)]
-mod char_iter;
-pub mod config;
-
-mod tty;
-
-use std::cell::RefCell;
-use std::collections::HashMap;
+mod editor;
+use self::editor::Editor;
+mod display;
+use self::display::*;
+use self::unicode_width::UnicodeWidthStr;
+mod line_editor;
+use std::io::{stdout, stdin, self, Read, Write};
 use std::fmt;
-use std::io::{self, Write};
-use std::mem;
-use std::path::Path;
-use std::rc::Rc;
-use std::result;
-use self::unicode_segmentation::UnicodeSegmentation;
-use self::unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::cmp::max;
+use std::thread;
+use super::history::History;
+use super::completion::Completer;
+use self::termion::input::TermRead;
+use self::termion::raw::IntoRawMode;
 
-use self::tty::{RawMode, RawReader, Term, Terminal};
+use self::termion::cursor::DetectCursorPos;
 
-use self::encode_unicode::CharExt;
-use self::delegate::{longest_common_prefix, Delegate};
-use self::history::{Direction, History};
-use self::line_buffer::{LineBuffer, WordAction, MAX_LINE};
-pub use self::keymap::{Anchor, At, CharSearch, Cmd, Movement, RepeatCount, Word};
-use self::keymap::EditState;
-use self::kill_ring::{KillRing, Mode};
-pub use self::config::{CompletionType, Config, EditMode, HistoryDuplicates};
-pub use self::consts::KeyPress;
 
-/// The error type for I/O and Linux Syscalls (Errno)
-pub type Result<T> = result::Result<T, error::ReadlineError>;
+pub struct Readline {
 
-// Represent the state during line editing.
-struct State<'out, 'prompt> {
-    out: &'out mut Write,
-    prompt: &'prompt str,  // Prompt to display
-    prompt_size: Position, // Prompt Unicode width and height
-    line: LineBuffer,      // Edited line buffer
-    cursor: Position,      // Cursor position (relative to the start of the prompt for `row`)
-    cols: usize,           // Number of columns in terminal
-    old_rows: usize,       // Number of rows used so far (from start of prompt to end of input)
-    history_index: usize,  // The history index we are currently editing
-    snapshot: LineBuffer,  // Current edited line before history browsing/completion
-    term: Terminal,        // terminal
-    edit_state: EditState,
 }
 
-#[derive(Copy, Clone, Debug, Default)]
-struct Position {
-    col: usize,
-    row: usize,
+pub enum ReadlineEvent {
+    ClearScreen,
+    Done,
+    Eof,
+    Interrupted,
+    HistorySearch,
+    Continue,
+    StartCompletionPager,
 }
 
-impl<'out, 'prompt> State<'out, 'prompt> {
-    fn new(
-        out: &'out mut Write,
-        term: Terminal,
-        config: &Config,
-        prompt: &'prompt str,
-        history_index: usize,
-        custom_bindings: Rc<RefCell<HashMap<KeyPress, Cmd>>>,
-    ) -> State<'out, 'prompt> {
-        let capacity = MAX_LINE;
-        let cols = term.get_columns();
-        let prompt_size = calculate_position(prompt, Position::default(), cols);
-        State {
-            out: out,
-            prompt: prompt,
-            prompt_size: prompt_size,
-            line: LineBuffer::with_capacity(capacity),
-            cursor: prompt_size,
-            cols: cols,
-            old_rows: prompt_size.row,
-            history_index: history_index,
-            snapshot: LineBuffer::with_capacity(capacity),
-            term: term,
-            edit_state: EditState::new(config, custom_bindings),
+impl Readline {
+    pub fn new() -> Readline {
+        Readline {
+
         }
     }
 
-    fn next_cmd<R: RawReader>(&mut self, rdr: &mut R) -> Result<Cmd> {
+    pub fn read(&mut self, completer: &Completer, history: &History) -> Option<String> {
+        let mut result = None;
         loop {
-            let rc = self.edit_state.next_cmd(rdr);
-            if rc.is_err() && self.term.sigwinch() {
-                self.update_columns();
-                try!(self.refresh_line());
-                continue;
-            }
-            return rc;
-        }
-    }
-
-    fn snapshot(&mut self) {
-        mem::swap(&mut self.line, &mut self.snapshot);
-    }
-
-    fn backup(&mut self) {
-        self.snapshot.backup(&self.line);
-    }
-
-    /// Rewrite the currently edited line accordingly to the buffer content,
-    /// cursor position, and number of columns of the terminal.
-    fn refresh_line(&mut self) -> Result<()> {
-        let prompt_size = self.prompt_size;
-        self.refresh(self.prompt, prompt_size)
-    }
-
-    fn refresh_prompt_and_line(&mut self, prompt: &str) -> Result<()> {
-        let prompt_size = calculate_position(prompt, Position::default(), self.cols);
-        self.refresh(prompt, prompt_size)
-    }
-
-    #[cfg(unix)]
-    fn refresh(&mut self, prompt: &str, prompt_size: Position) -> Result<()> {
-        use std::fmt::Write;
-
-        // calculate the position of the end of the input line
-        let end_pos = calculate_position(&self.line, prompt_size, self.cols);
-        // calculate the desired position of the cursor
-        let cursor = calculate_position(&self.line[..self.line.pos()], prompt_size, self.cols);
-
-        let mut ab = String::new();
-
-        let cursor_row_movement = self.old_rows - self.cursor.row;
-        // move the cursor down as required
-        if cursor_row_movement > 0 {
-            write!(ab, "\x1b[{}B", cursor_row_movement).unwrap();
-        }
-        // clear old rows
-        for _ in 0..self.old_rows {
-            ab.push_str("\r\x1b[0K\x1b[1A");
-        }
-        // clear the line
-        ab.push_str("\r\x1b[0K");
-
-        // display the prompt
-        ab.push_str(prompt);
-        // display the input line
-        ab.push_str(&self.line);
-        // we have to generate our own newline on line wrap
-        if end_pos.col == 0 && end_pos.row > 0 {
-            ab.push_str("\n");
-        }
-        // position the cursor
-        let cursor_row_movement = end_pos.row - cursor.row;
-        // move the cursor up as required
-        if cursor_row_movement > 0 {
-            write!(ab, "\x1b[{}A", cursor_row_movement).unwrap();
-        }
-        // position the cursor within the line
-        if cursor.col > 0 {
-            write!(ab, "\r\x1b[{}C", cursor.col).unwrap();
-        } else {
-            ab.push('\r');
-        }
-
-        self.cursor = cursor;
-        self.old_rows = end_pos.row;
-
-        write_and_flush(self.out, ab.as_bytes())
-    }
-
-    fn update_columns(&mut self) {
-        self.cols = self.term.get_columns();
-    }
-}
-
-impl<'out, 'prompt> fmt::Debug for State<'out, 'prompt> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("State")
-            .field("prompt", &self.prompt)
-            .field("prompt_size", &self.prompt_size)
-            .field("buf", &self.line)
-            .field("cursor", &self.cursor)
-            .field("cols", &self.cols)
-            .field("old_rows", &self.old_rows)
-            .field("history_index", &self.history_index)
-            .field("snapshot", &self.snapshot)
-            .finish()
-    }
-}
-
-fn write_and_flush(w: &mut Write, buf: &[u8]) -> Result<()> {
-    try!(w.write_all(buf));
-    try!(w.flush());
-    Ok(())
-}
-
-/// Beep, used for completion when there is nothing to complete or when all
-/// the choices were already shown.
-fn beep() -> Result<()> {
-    write_and_flush(&mut io::stderr(), b"\x07") // TODO bell-style
-}
-
-/// Calculate the number of columns and rows used to display `s` on a `cols` width terminal
-/// starting at `orig`.
-/// Control characters are treated as having zero width.
-/// Characters with 2 column width are correctly handled (not splitted).
-#[allow(if_same_then_else)]
-fn calculate_position(s: &str, orig: Position, cols: usize) -> Position {
-    let mut pos = orig;
-    let mut esc_seq = 0;
-    for c in s.chars() {
-        let cw = if esc_seq == 1 {
-            if c == '[' {
-                // CSI
-                esc_seq = 2;
-            } else {
-                // two-character sequence
-                esc_seq = 0;
-            }
-            None
-        } else if esc_seq == 2 {
-            if c == ';' || (c >= '0' && c <= '9') {
-            } else if c == 'm' {
-                // last
-                esc_seq = 0;
-            } else {
-                // not supported
-                esc_seq = 0;
-            }
-            None
-        } else if c == '\x1b' {
-            esc_seq = 1;
-            None
-        } else if c == '\n' {
-            pos.col = 0;
-            pos.row += 1;
-            None
-        } else {
-            c.width()
-        };
-        if let Some(cw) = cw {
-            pos.col += cw;
-            if pos.col > cols {
-                pos.row += 1;
-                pos.col = cw;
-            }
-        }
-    }
-    if pos.col == cols {
-        pos.col = 0;
-        pos.row += 1;
-    }
-    pos
-}
-
-/// Insert the character `ch` at cursor current position.
-fn edit_insert(s: &mut State, ch: char, n: RepeatCount) -> Result<()> {
-    if let Some(push) = s.line.insert(ch, n) {
-        if push {
-            if n == 1 && s.cursor.col + ch.width().unwrap_or(0) < s.cols {
-                // Avoid a full update of the line in the trivial case.
-                let cursor = calculate_position(&s.line[..s.line.pos()], s.prompt_size, s.cols);
-                s.cursor = cursor;
-                write_and_flush(s.out, ch.to_utf8().as_bytes())
-            } else {
-                s.refresh_line()
-            }
-        } else {
-            s.refresh_line()
-        }
-    } else {
-        Ok(())
-    }
-}
-
-/// Replace a single (or n) character(s) under the cursor (Vi mode)
-fn edit_replace_char(s: &mut State, ch: char, n: RepeatCount) -> Result<()> {
-    if let Some(chars) = s.line.delete(n) {
-        let count = chars.graphemes(true).count();
-        s.line.insert(ch, count);
-        s.line.move_backward(1);
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-// Yank/paste `text` at current position.
-fn edit_yank(s: &mut State, text: &str, anchor: Anchor, n: RepeatCount) -> Result<()> {
-    if let Anchor::After = anchor {
-        s.line.move_forward(1);
-    }
-    if s.line.yank(text, n).is_some() {
-        if !s.edit_state.is_emacs_mode() {
-            s.line.move_backward(1);
-        }
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-// Delete previously yanked text and yank/paste `text` at current position.
-fn edit_yank_pop(s: &mut State, yank_size: usize, text: &str) -> Result<()> {
-    s.line.yank_pop(yank_size, text);
-    edit_yank(s, text, Anchor::Before, 1)
-}
-
-/// Move cursor on the left.
-fn edit_move_backward(s: &mut State, n: RepeatCount) -> Result<()> {
-    if s.line.move_backward(n) {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Move cursor on the right.
-fn edit_move_forward(s: &mut State, n: RepeatCount) -> Result<()> {
-    if s.line.move_forward(n) {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Move cursor to the start of the line.
-fn edit_move_home(s: &mut State) -> Result<()> {
-    if s.line.move_home() {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Move cursor to the end of the line.
-fn edit_move_end(s: &mut State) -> Result<()> {
-    if s.line.move_end() {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Delete the character at the right of the cursor without altering the cursor
-/// position. Basically this is what happens with the "Delete" keyboard key.
-fn edit_delete(s: &mut State, n: RepeatCount) -> Result<()> {
-    if s.line.delete(n).is_some() {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Backspace implementation.
-fn edit_backspace(s: &mut State, n: RepeatCount) -> Result<()> {
-    if s.line.backspace(n).is_some() {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Kill the text from point to the end of the line.
-fn edit_kill_line(s: &mut State) -> Result<Option<String>> {
-    if let Some(text) = s.line.kill_line() {
-        try!(s.refresh_line());
-        Ok(Some(text))
-    } else {
-        Ok(None)
-    }
-}
-
-/// Kill backward from point to the beginning of the line.
-fn edit_discard_line(s: &mut State) -> Result<Option<String>> {
-    if let Some(text) = s.line.discard_line() {
-        try!(s.refresh_line());
-        Ok(Some(text))
-    } else {
-        Ok(None)
-    }
-}
-
-/// Exchange the char before cursor with the character at cursor.
-fn edit_transpose_chars(s: &mut State) -> Result<()> {
-    if s.line.transpose_chars() {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-fn edit_move_to_prev_word(s: &mut State, word_def: Word, n: RepeatCount) -> Result<()> {
-    if s.line.move_to_prev_word(word_def, n) {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Delete the previous word, maintaining the cursor at the start of the
-/// current word.
-fn edit_delete_prev_word(s: &mut State, word_def: Word, n: RepeatCount) -> Result<Option<String>> {
-    if let Some(text) = s.line.delete_prev_word(word_def, n) {
-        try!(s.refresh_line());
-        Ok(Some(text))
-    } else {
-        Ok(None)
-    }
-}
-
-fn edit_move_to_next_word(s: &mut State, at: At, word_def: Word, n: RepeatCount) -> Result<()> {
-    if s.line.move_to_next_word(at, word_def, n) {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-fn edit_move_to(s: &mut State, cs: CharSearch, n: RepeatCount) -> Result<()> {
-    if s.line.move_to(cs, n) {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Kill from the cursor to the end of the current word, or, if between words, to the end of the next word.
-fn edit_delete_word(
-    s: &mut State,
-    at: At,
-    word_def: Word,
-    n: RepeatCount,
-) -> Result<Option<String>> {
-    if let Some(text) = s.line.delete_word(at, word_def, n) {
-        try!(s.refresh_line());
-        Ok(Some(text))
-    } else {
-        Ok(None)
-    }
-}
-
-fn edit_delete_to(s: &mut State, cs: CharSearch, n: RepeatCount) -> Result<Option<String>> {
-    if let Some(text) = s.line.delete_to(cs, n) {
-        try!(s.refresh_line());
-        Ok(Some(text))
-    } else {
-        Ok(None)
-    }
-}
-
-fn edit_word(s: &mut State, a: WordAction) -> Result<()> {
-    if s.line.edit_word(a) {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-fn edit_transpose_words(s: &mut State, n: RepeatCount) -> Result<()> {
-    if s.line.transpose_words(n) {
-        s.refresh_line()
-    } else {
-        Ok(())
-    }
-}
-
-/// Substitute the currently edited line with the next or previous history
-/// entry.
-fn edit_history_next(s: &mut State, history: &History, prev: bool) -> Result<()> {
-    if history.is_empty() {
-        return Ok(());
-    }
-    if s.history_index == history.len() {
-        if prev {
-            // Save the current edited line before to overwrite it
-            s.snapshot();
-        } else {
-            return Ok(());
-        }
-    } else if s.history_index == 0 && prev {
-        return Ok(());
-    }
-    if prev {
-        s.history_index -= 1;
-    } else {
-        s.history_index += 1;
-    }
-    if s.history_index < history.len() {
-        let buf = history.get(s.history_index).unwrap();
-        s.line.update(buf, buf.len());
-    } else {
-        // Restore current edited line
-        s.snapshot();
-    }
-    s.refresh_line()
-}
-
-fn edit_history_search(s: &mut State, history: &History, dir: Direction) -> Result<()> {
-    if history.is_empty() {
-        return beep();
-    }
-    if s.history_index == history.len() && dir == Direction::Forward {
-        return beep();
-    } else if s.history_index == 0 && dir == Direction::Reverse {
-        return beep();
-    }
-    if dir == Direction::Reverse {
-        s.history_index -= 1;
-    } else {
-        s.history_index += 1;
-    }
-    if let Some(history_index) =
-        history.starts_with(&s.line.as_str()[..s.line.pos()], s.history_index, dir)
-    {
-        s.history_index = history_index;
-        let buf = history.get(history_index).unwrap();
-        s.line.update(buf, buf.len());
-        s.refresh_line()
-    } else {
-        beep()
-    }
-}
-
-/// Substitute the currently edited line with the first/last history entry.
-fn edit_history(s: &mut State, history: &History, first: bool) -> Result<()> {
-    if history.is_empty() {
-        return Ok(());
-    }
-    if s.history_index == history.len() {
-        if first {
-            // Save the current edited line before to overwrite it
-            s.snapshot();
-        } else {
-            return Ok(());
-        }
-    } else if s.history_index == 0 && first {
-        return Ok(());
-    }
-    if first {
-        s.history_index = 0;
-        let buf = history.get(s.history_index).unwrap();
-        s.line.update(buf, buf.len());
-    } else {
-        s.history_index = history.len();
-        // Restore current edited line
-        s.snapshot();
-    }
-    s.refresh_line()
-}
-
-/// Completes the line/word
-fn complete_line<R: RawReader>(
-    rdr: &mut R,
-    s: &mut State,
-    delegate: &Delegate,
-    config: &Config,
-) -> Result<Option<Cmd>> {
-    // get a list of completions
-    let (start, candidates) = try!(delegate.complete(&s.line, s.line.pos()));
-    // if no completions, we are done
-    if candidates.is_empty() {
-        try!(beep());
-        Ok(None)
-    } else if CompletionType::Circular == config.completion_type() {
-        // Save the current edited line before to overwrite it
-        s.backup();
-        let mut cmd;
-        let mut i = 0;
-        loop {
-            // Show completion or original buffer
-            if i < candidates.len() {
-                delegate.update(&mut s.line, start, &candidates[i]);
-                try!(s.refresh_line());
-            } else {
-                // Restore current edited line
-                s.snapshot();
-                try!(s.refresh_line());
-                s.snapshot();
-            }
-
-            cmd = try!(s.next_cmd(rdr));
-            match cmd {
-                Cmd::Complete => {
-                    i = (i + 1) % (candidates.len() + 1); // Circular
-                    if i == candidates.len() {
-                        try!(beep());
-                    }
-                }
-                Cmd::Abort => {
-                    // Re-show original buffer
-                    s.snapshot();
-                    if i < candidates.len() {
-                        try!(s.refresh_line());
-                    }
-                    return Ok(None);
-                }
-                _ => {
-                    if i == candidates.len() {
-                        s.snapshot();
-                    }
+            let res = self.read_impl(completer, history);
+            println!("");
+            match res {
+                Ok(string) => {
+                    result = Some(string);
                     break;
-                }
-            }
-        }
-        Ok(Some(cmd))
-    } else if CompletionType::List == config.completion_type() {
-        // beep if ambiguous
-        if candidates.len() > 1 {
-            try!(beep());
-        }
-        if let Some(lcp) = longest_common_prefix(&candidates) {
-            // if we can extend the item, extend it and return to main loop
-            if lcp.len() > s.line.pos() - start {
-                delegate.update(&mut s.line, start, lcp);
-                try!(s.refresh_line());
-                return Ok(None);
-            }
-        }
-        // we can't complete any further, wait for second tab
-        let mut cmd = try!(s.next_cmd(rdr));
-        // if any character other than tab, pass it to the main loop
-        if cmd != Cmd::Complete {
-            return Ok(Some(cmd));
-        }
-        // move cursor to EOL to avoid overwriting the command line
-        let save_pos = s.line.pos();
-        try!(edit_move_end(s));
-        s.line.set_pos(save_pos);
-        // we got a second tab, maybe show list of possible completions
-        let show_completions = if candidates.len() > config.completion_prompt_limit() {
-            let msg = format!("\nDisplay all {} possibilities? (y or n)", candidates.len());
-            try!(write_and_flush(s.out, msg.as_bytes()));
-            s.old_rows += 1;
-            while cmd != Cmd::SelfInsert(1, 'y') && cmd != Cmd::SelfInsert(1, 'Y')
-                && cmd != Cmd::SelfInsert(1, 'n')
-                && cmd != Cmd::SelfInsert(1, 'N')
-                && cmd != Cmd::Kill(Movement::BackwardChar(1))
-            {
-                cmd = try!(s.next_cmd(rdr));
-            }
-            match cmd {
-                Cmd::SelfInsert(1, 'y') | Cmd::SelfInsert(1, 'Y') => true,
-                _ => false,
-            }
-        } else {
-            true
-        };
-        if show_completions {
-            page_completions(rdr, s, &candidates)
-        } else {
-            try!(s.refresh_line());
-            Ok(None)
-        }
-    } else {
-        Ok(None)
-    }
-}
+                },
+                Err(event) => {
+                    match event {
+                        ReadlineEvent::ClearScreen => {
 
-fn page_completions<R: RawReader>(
-    rdr: &mut R,
-    s: &mut State,
-    candidates: &[String],
-) -> Result<Option<Cmd>> {
-    use std::cmp;
+                        },
+                        ReadlineEvent::Eof => {
+                            return None;
+                        },
+                        ReadlineEvent::Interrupted => {
 
-    let min_col_pad = 2;
-    let max_width = cmp::min(
-        s.cols,
-        candidates
-            .into_iter()
-            .map(|s| s.as_str().width())
-            .max()
-            .unwrap() + min_col_pad,
-    );
-    let num_cols = s.cols / max_width;
-
-    let mut pause_row = s.term.get_rows() - 1;
-    let num_rows = (candidates.len() + num_cols - 1) / num_cols;
-    let mut ab = String::new();
-    for row in 0..num_rows {
-        if row == pause_row {
-            try!(write_and_flush(s.out, b"\n--More--"));
-            let mut cmd = Cmd::Noop;
-            while cmd != Cmd::SelfInsert(1, 'y') && cmd != Cmd::SelfInsert(1_, 'Y')
-                && cmd != Cmd::SelfInsert(1, 'n')
-                && cmd != Cmd::SelfInsert(1_, 'N')
-                && cmd != Cmd::SelfInsert(1, 'q')
-                && cmd != Cmd::SelfInsert(1, 'Q')
-                && cmd != Cmd::SelfInsert(1, ' ')
-                && cmd != Cmd::Kill(Movement::BackwardChar(1))
-                && cmd != Cmd::AcceptLine
-            {
-                cmd = try!(s.next_cmd(rdr));
-            }
-            match cmd {
-                Cmd::SelfInsert(1, 'y') | Cmd::SelfInsert(1, 'Y') | Cmd::SelfInsert(1, ' ') => {
-                    pause_row += s.term.get_rows() - 1;
-                }
-                Cmd::AcceptLine => {
-                    pause_row += 1;
-                }
-                _ => break,
-            }
-            try!(write_and_flush(s.out, b"\n"));
-        } else {
-            try!(write_and_flush(s.out, b"\n"));
-        }
-        ab.clear();
-        for col in 0..num_cols {
-            let i = (col * num_rows) + row;
-            if i < candidates.len() {
-                let candidate = &candidates[i];
-                ab.push_str(candidate);
-                let width = candidate.as_str().width();
-                if ((col + 1) * num_rows) + row < candidates.len() {
-                    for _ in width..max_width {
-                        ab.push(' ');
+                        },
+                        _ => {
+                            panic!("unexpected event");
+                        }
                     }
                 }
             }
         }
-        try!(write_and_flush(s.out, ab.as_bytes()));
+        result
     }
-    try!(write_and_flush(s.out, b"\n"));
-    try!(s.refresh_line());
-    Ok(None)
-}
 
-/// Incremental search
-fn reverse_incremental_search<R: RawReader>(
-    rdr: &mut R,
-    s: &mut State,
-    history: &History,
-) -> Result<Option<Cmd>> {
-    if history.is_empty() {
-        return Ok(None);
-    }
-    // Save the current edited line (and cursor position) before to overwrite it
-    s.snapshot();
-
-    let mut search_buf = String::new();
-    let mut history_idx = history.len() - 1;
-    let mut direction = Direction::Reverse;
-    let mut success = true;
-
-    let mut cmd;
-    // Display the reverse-i-search prompt and process chars
-    loop {
-        let prompt = if success {
-            format!("(reverse-i-search)`{}': ", search_buf)
-        } else {
-            format!("(failed reverse-i-search)`{}': ", search_buf)
-        };
-        try!(s.refresh_prompt_and_line(&prompt));
-
-        cmd = try!(s.next_cmd(rdr));
-        if let Cmd::SelfInsert(_, c) = cmd {
-            search_buf.push(c);
-        } else {
-            match cmd {
-                Cmd::Kill(Movement::BackwardChar(_)) => {
-                    search_buf.pop();
-                    continue;
+    fn render(&self, editor: &mut Editor, cursor: &mut CursorManager, term_buffer: &mut TerminalBuffer, terminal_width: usize, mut stdout: &mut Write) {
+        term_buffer.set_width(terminal_width);
+        let (saved_x, saved_y) = cursor.position();
+        let new_position = {
+            let mut index = 0;
+            let mut cursor_position: Option<(u16, u16)> = None;
+            editor.render(&mut |ref row| {
+                if let Some(row_cursor_position) = term_buffer.add_row(row) {
+                    assert!(cursor_position.is_none());
+                    cursor_position = Some((row_cursor_position as u16, index as u16))
                 }
-                Cmd::ReverseSearchHistory => {
-                    direction = Direction::Reverse;
-                    if history_idx > 0 {
-                        history_idx -= 1;
-                    } else {
-                        success = false;
-                        continue;
+                index += 1;
+            }, terminal_width);
+            cursor_position
+        };
+        cursor.set_hidden(&mut stdout, true);
+        cursor.move_to(&mut stdout, 0, 0);
+        term_buffer.render(&mut stdout);
+        if let Some((x, y)) = new_position {
+            cursor.move_to(&mut stdout, x, y);
+            cursor.set_hidden(&mut stdout, false);
+        } else {
+            cursor.move_to(&mut stdout, 0, 0);
+            cursor.set_hidden(&mut stdout, true);
+        }
+        stdout.flush().expect("failed to flush stdout");
+    }
+
+    fn read_impl(&mut self, completer: &Completer, history: &History) -> Result<String, ReadlineEvent> {
+        let mut editor = Editor::new(completer, history);
+        let mut term_buffer = TerminalBuffer::new();
+        let mut stdout = stdout().into_raw_mode().expect("failed to set raw mode");
+        let mut cursor = CursorManager::new();
+        let (mut terminal_width, mut terminal_height) = termion::terminal_size().expect("failed to get terminal size");
+        let stdout_err_msg = "failed to write to stdout";
+        let mut result = Err(ReadlineEvent::Interrupted);
+        let stdin = stdin();
+        self.render(&mut editor, &mut cursor, &mut term_buffer, terminal_width as usize, &mut stdout);
+        for key in stdin.keys() {
+            // input
+            if let Ok(key) = key {
+                match editor.handle_input(key) {
+                    ReadlineEvent::Continue => {},
+                    ReadlineEvent::Done => {
+                        result = Ok(editor.buffer());
+                        break;
+                    },
+                    other => {
+                        result = Err(other);
+                        break;
                     }
                 }
-                Cmd::ForwardSearchHistory => {
-                    direction = Direction::Forward;
-                    if history_idx < history.len() - 1 {
-                        history_idx += 1;
-                    } else {
-                        success = false;
-                        continue;
-                    }
+                let (new_terminal_width, new_terminal_height) = termion::terminal_size().expect("failed to get terminal size");
+                if new_terminal_width != terminal_width || new_terminal_height != terminal_height {
+                    terminal_width = new_terminal_width;
+                    terminal_height = new_terminal_height;
                 }
-                Cmd::Abort => {
-                    // Restore current edited line (before search)
-                    s.snapshot();
-                    try!(s.refresh_line());
-                    return Ok(None);
-                }
-                _ => break,
-            }
-        }
-        success = match history.search(&search_buf, history_idx, direction) {
-            Some(idx) => {
-                history_idx = idx;
-                let entry = history.get(idx).unwrap();
-                let pos = entry.find(&search_buf).unwrap();
-                s.line.update(entry, pos);
-                true
-            }
-            _ => false,
-        };
-    }
-    Ok(Some(cmd))
-}
-
-/// Handles reading and editting the readline buffer.
-/// It will also handle special inputs in an appropriate fashion
-/// (e.g., C-c will exit readline)
-#[allow(let_unit_value)]
-fn readline_edit<C: Delegate>(
-    prompt: &str,
-    editor: &mut Editor,
-    original_mode: self::tty::Mode,
-    delegate: &C,
-) -> Result<String> {
-    let mut stdout = editor.term.create_writer();
-
-    editor.kill_ring.reset();
-    let mut s = State::new(
-        &mut stdout,
-        editor.term.clone(),
-        &editor.config,
-        prompt,
-        editor.history.len(),
-        editor.custom_bindings.clone(),
-    );
-    try!(s.refresh_line());
-
-    let mut rdr = try!(s.term.create_reader(&editor.config));
-
-    loop {
-        let rc = s.next_cmd(&mut rdr);
-        let mut cmd = try!(rc);
-
-        if cmd.should_reset_kill_ring() {
-            editor.kill_ring.reset();
-        }
-
-        // autocomplete
-        if cmd == Cmd::Complete {
-            let next = try!(complete_line(&mut rdr, &mut s, delegate, &editor.config));
-            if next.is_some() {
-                cmd = next.unwrap();
             } else {
-                continue;
-            }
-        }
-
-        if let Cmd::SelfInsert(n, c) = cmd {
-            try!(edit_insert(&mut s, c, n));
-            continue;
-        } else if let Cmd::Insert(n, text) = cmd {
-            try!(edit_yank(&mut s, &text, Anchor::Before, n));
-            continue;
-        }
-
-        if cmd == Cmd::ReverseSearchHistory {
-            // Search history backward
-            let next = try!(reverse_incremental_search(
-                &mut rdr,
-                &mut s,
-                &editor.history
-            ));
-            if next.is_some() {
-                cmd = next.unwrap();
-            } else {
-                continue;
-            }
-        }
-
-        match cmd {
-            Cmd::Move(Movement::BeginningOfLine) => {
-                // Move to the beginning of line.
-                try!(edit_move_home(&mut s))
-            }
-            Cmd::Move(Movement::ViFirstPrint) => {
-                try!(edit_move_home(&mut s));
-                try!(edit_move_to_next_word(&mut s, At::Start, Word::Big, 1))
-            }
-            Cmd::Move(Movement::BackwardChar(n)) => {
-                // Move back a character.
-                try!(edit_move_backward(&mut s, n))
-            }
-            Cmd::Kill(Movement::ForwardChar(n)) => {
-                // Delete (forward) one character at point.
-                try!(edit_delete(&mut s, n))
-            }
-            Cmd::Replace(n, c) => {
-                try!(edit_replace_char(&mut s, c, n));
-            }
-            Cmd::EndOfFile => {
-                if !s.edit_state.is_emacs_mode() && !s.line.is_empty() {
-                    try!(edit_move_end(&mut s));
-                    break;
-                } else if s.line.is_empty() {
-                    return Err(error::ReadlineError::Eof);
-                } else {
-                    try!(edit_delete(&mut s, 1))
-                }
-            }
-            Cmd::Move(Movement::EndOfLine) => {
-                // Move to the end of line.
-                try!(edit_move_end(&mut s))
-            }
-            Cmd::Move(Movement::ForwardChar(n)) => {
-                // Move forward a character.
-                try!(edit_move_forward(&mut s, n))
-            }
-            Cmd::Kill(Movement::BackwardChar(n)) => {
-                // Delete one character backward.
-                try!(edit_backspace(&mut s, n))
-            }
-            Cmd::Kill(Movement::EndOfLine) => {
-                // Kill the text from point to the end of the line.
-                if let Some(text) = try!(edit_kill_line(&mut s)) {
-                    editor.kill_ring.kill(&text, Mode::Append)
-                }
-            }
-            Cmd::Kill(Movement::WholeLine) => {
-                try!(edit_move_home(&mut s));
-                if let Some(text) = try!(edit_kill_line(&mut s)) {
-                    editor.kill_ring.kill(&text, Mode::Append)
-                }
-            }
-            Cmd::ClearScreen => {
-                // Clear the screen leaving the current line at the top of the screen.
-                try!(s.term.clear_screen(&mut s.out));
-                try!(s.refresh_line())
-            }
-            Cmd::NextHistory => {
-                // Fetch the next command from the history list.
-                try!(edit_history_next(&mut s, &editor.history, false))
-            }
-            Cmd::PreviousHistory => {
-                // Fetch the previous command from the history list.
-                try!(edit_history_next(&mut s, &editor.history, true))
-            }
-            Cmd::HistorySearchBackward => try!(edit_history_search(
-                &mut s,
-                &editor.history,
-                Direction::Reverse
-            )),
-            Cmd::HistorySearchForward => try!(edit_history_search(
-                &mut s,
-                &editor.history,
-                Direction::Forward
-            )),
-            Cmd::TransposeChars => {
-                // Exchange the char before cursor with the character at cursor.
-                try!(edit_transpose_chars(&mut s))
-            }
-            Cmd::Kill(Movement::BeginningOfLine) => {
-                // Kill backward from point to the beginning of the line.
-                if let Some(text) = try!(edit_discard_line(&mut s)) {
-                    editor.kill_ring.kill(&text, Mode::Prepend)
-                }
-            }
-            #[cfg(unix)]
-            Cmd::QuotedInsert => {
-                // Quoted insert
-                let c = try!(rdr.next_char());
-                try!(edit_insert(&mut s, c, 1)) // FIXME
-            }
-            Cmd::Yank(n, anchor) => {
-                // retrieve (yank) last item killed
-                if let Some(text) = editor.kill_ring.yank() {
-                    try!(edit_yank(&mut s, text, anchor, n))
-                }
-            }
-            Cmd::ViYankTo(mvt) => {
-                if let Some(text) = s.line.copy(mvt) {
-                    editor.kill_ring.kill(&text, Mode::Append)
-                }
-            }
-            // TODO CTRL-_ // undo
-            Cmd::AcceptLine => {
-                // Accept the line regardless of where the cursor is.
-                try!(edit_move_end(&mut s));
                 break;
             }
-            Cmd::Kill(Movement::BackwardWord(n, word_def)) => {
-                // kill one word backward (until start of word)
-                if let Some(text) = try!(edit_delete_prev_word(&mut s, word_def, n)) {
-                    editor.kill_ring.kill(&text, Mode::Prepend)
-                }
-            }
-            Cmd::BeginningOfHistory => {
-                // move to first entry in history
-                try!(edit_history(&mut s, &editor.history, true))
-            }
-            Cmd::EndOfHistory => {
-                // move to last entry in history
-                try!(edit_history(&mut s, &editor.history, false))
-            }
-            Cmd::Move(Movement::BackwardWord(n, word_def)) => {
-                // move backwards one word
-                try!(edit_move_to_prev_word(&mut s, word_def, n))
-            }
-            Cmd::CapitalizeWord => {
-                // capitalize word after point
-                try!(edit_word(&mut s, WordAction::CAPITALIZE))
-            }
-            Cmd::Kill(Movement::ForwardWord(n, at, word_def)) => {
-                // kill one word forward (until start/end of word)
-                if let Some(text) = try!(edit_delete_word(&mut s, at, word_def, n)) {
-                    editor.kill_ring.kill(&text, Mode::Append)
-                }
-            }
-            Cmd::Move(Movement::ForwardWord(n, at, word_def)) => {
-                // move forwards one word
-                try!(edit_move_to_next_word(&mut s, at, word_def, n))
-            }
-            Cmd::DowncaseWord => {
-                // lowercase word after point
-                try!(edit_word(&mut s, WordAction::LOWERCASE))
-            }
-            Cmd::TransposeWords(n) => {
-                // transpose words
-                try!(edit_transpose_words(&mut s, n))
-            }
-            Cmd::UpcaseWord => {
-                // uppercase word after point
-                try!(edit_word(&mut s, WordAction::UPPERCASE))
-            }
-            Cmd::YankPop => {
-                // yank-pop
-                if let Some((yank_size, text)) = editor.kill_ring.yank_pop() {
-                    try!(edit_yank_pop(&mut s, yank_size, text))
-                }
-            }
-            Cmd::Move(Movement::ViCharSearch(n, cs)) => try!(edit_move_to(&mut s, cs, n)),
-            Cmd::Kill(Movement::ViCharSearch(n, cs)) => {
-                if let Some(text) = try!(edit_delete_to(&mut s, cs, n)) {
-                    editor.kill_ring.kill(&text, Mode::Append)
-                }
-            }
-            Cmd::Interrupt => {
-                return Err(error::ReadlineError::Interrupted);
-            }
-            #[cfg(unix)]
-            Cmd::Suspend => {
-                try!(original_mode.disable_raw_mode());
-                try!(self::tty::suspend());
-                try!(s.term.enable_raw_mode()); // TODO original_mode may have changed
-                try!(s.refresh_line());
-                continue;
-            }
-            Cmd::Noop => {}
-            _ => {
-                // Ignore the character typed.
-            }
+            // render
+            self.render(&mut editor, &mut cursor, &mut term_buffer, terminal_width as usize, &mut stdout);
         }
-    }
-    Ok(s.line.into_string())
-}
-
-struct Guard(self::tty::Mode);
-
-#[allow(unused_must_use)]
-impl Drop for Guard {
-    fn drop(&mut self) {
-        let Guard(mode) = *self;
-        mode.disable_raw_mode();
+        cursor.move_to(&mut stdout, 0, 0);
+        self.render(&mut editor, &mut cursor, &mut term_buffer, terminal_width as usize, &mut stdout);
+        cursor.move_to(&mut stdout, 0, 0);
+        result
     }
 }
 
-/// Readline method that will enable RAW mode, call the `readline_edit()`
-/// method and disable raw mode
-fn readline_raw<C: Delegate>(prompt: &str, editor: &mut Editor, delegate: &C) -> Result<String> {
-    let original_mode = try!(editor.term.enable_raw_mode());
-    let guard = Guard(original_mode);
-    let user_input = readline_edit(prompt, editor, original_mode, delegate);
-    drop(guard); // try!(disable_raw_mode(original_mode));
-    println!("");
-    user_input
+struct CursorManager {
+    xpos: u16,
+    ypos: u16,
+    hidden: bool,
 }
 
-fn readline_direct() -> Result<String> {
-    let mut line = String::new();
-    if try!(io::stdin().read_line(&mut line)) > 0 {
-        Ok(line)
-    } else {
-        Err(error::ReadlineError::Eof)
-    }
-}
-
-/// Line editor
-pub struct Editor {
-    term: Terminal,
-    history: History,
-    kill_ring: KillRing,
-    config: Config,
-    custom_bindings: Rc<RefCell<HashMap<KeyPress, Cmd>>>,
-}
-
-impl Editor {
-    pub fn new() -> Editor {
-        Self::with_config(Config::default())
-    }
-
-    pub fn with_config(config: Config) -> Editor {
-        let term = Terminal::new();
-        Editor {
-            term: term,
-            history: History::with_config(config),
-            kill_ring: KillRing::new(60),
-            config: config,
-            custom_bindings: Rc::new(RefCell::new(HashMap::new())),
+impl CursorManager {
+    pub fn new() -> CursorManager {
+        CursorManager {
+            xpos: 0,
+            ypos: 0,
+            hidden: false,
         }
     }
 
-    /// This method will read a line from STDIN and will display a `prompt`
-    pub fn readline<C: Delegate>(&mut self, delegate: &C) -> Result<String> {
-        if self.term.is_unsupported() {
-            debug!(target: "rustyline", "unsupported terminal");
-            // Write prompt and flush it to stdout
-            let mut stdout = io::stdout();
-            let prompt = delegate.prompt(false);
-            try!(write_and_flush(&mut stdout, prompt.as_bytes()));
+    pub fn position(&self) -> (u16, u16) {
+        (self.xpos, self.ypos)
+    }
 
-            readline_direct()
-        } else if !self.term.is_stdin_tty() {
-            debug!(target: "rustyline", "stdin is not a tty");
-            // Not a tty: read from file / pipe.
-            readline_direct()
+    pub fn is_hidden(&self) -> bool { self.hidden }
+
+    pub fn set_hidden<W: io::Write>(&mut self, writer: &mut W, hidden: bool) {
+        self.hidden = hidden;
+        let err_msg = "failed to write to stdout";
+        if hidden {
+            write!(writer, "{}", termion::cursor::Hide).expect(&err_msg);
         } else {
-            readline_raw(&delegate.prompt(true), self, delegate)
+            write!(writer, "{}", termion::cursor::Show).expect(&err_msg);
         }
     }
 
-    /// Load the history from the specified file.
-    pub fn load_history<P: AsRef<Path> + ?Sized>(&mut self, path: &P) -> Result<()> {
-        self.history.load(path)
-    }
-    /// Save the history in the specified file.
-    pub fn save_history<P: AsRef<Path> + ?Sized>(&self, path: &P) -> Result<()> {
-        self.history.save(path)
-    }
-    /// Add a new entry in the history.
-    pub fn add_history_entry<S: AsRef<str> + Into<String>>(&mut self, line: S) -> bool {
-        self.history.add(line)
-    }
-    /// Clear history.
-    pub fn clear_history(&mut self) {
-        self.history.clear()
-    }
-    /// Return a mutable reference to the history object.
-    pub fn get_history(&mut self) -> &mut History {
-        &mut self.history
-    }
-    /// Return an immutable reference to the history object.
-    pub fn get_history_const(&self) -> &History {
-        &self.history
-    }
+    pub fn move_to<W: io::Write>(&mut self, writer: &mut W, x: u16, y: u16) {
+        let err_msg = "failed to write to stdout";
+        if x < self.xpos {
+            write!(writer, "{}", termion::cursor::Left(self.xpos - x)).expect(&err_msg);
+        } else if x > self.xpos {
+            write!(writer, "{}", termion::cursor::Right(x - self.xpos)).expect(&err_msg);
+        }
 
-    /// Bind a sequence to a command.
-    pub fn bind_sequence(&mut self, key_seq: KeyPress, cmd: Cmd) -> Option<Cmd> {
-        self.custom_bindings.borrow_mut().insert(key_seq, cmd)
+        if y < self.ypos {
+            write!(writer, "{}", termion::cursor::Up(self.ypos - y)).expect(&err_msg);
+        } else if y > self.ypos {
+            write!(writer, "{}", termion::cursor::Down(y - self.ypos)).expect(&err_msg);
+        }
+        self.xpos = x;
+        self.ypos = y;
     }
-    /// Remove a binding for the given sequence.
-    pub fn unbind_sequence(&mut self, key_seq: KeyPress) -> Option<Cmd> {
-        self.custom_bindings.borrow_mut().remove(&key_seq)
-    }
+}
 
-    /// ```
-    /// let mut rl = rustyline::Editor::<()>::new();
-    /// for readline in rl.iter("> ") {
-    ///     match readline {
-    ///         Ok(line) => {
-    ///             println!("Line: {}", line);
-    ///         },
-    ///         Err(err) => {
-    ///             println!("Error: {:?}", err);
-    ///             break
-    ///         }
-    ///     }
-    /// }
-    /// ```
-    pub fn iter<'a, C: Delegate>(&'a mut self, delegate: &'a C) -> Iter<C> {
-        Iter {
-            editor: self,
-            delegate: delegate,
+struct TerminalBuffer {
+    buffer: Vec<String>,
+    last_rendered: Vec<String>,
+    terminal_width: usize,
+}
+
+impl TerminalBuffer {
+    pub fn new() -> TerminalBuffer {
+        TerminalBuffer {
+            buffer: Vec::new(),
+            last_rendered: Vec::new(),
+            terminal_width: 80,
         }
     }
-}
 
-impl fmt::Debug for Editor {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Editor")
-            .field("term", &self.term)
-            .field("config", &self.config)
-            .finish()
+    pub fn set_width(&mut self, width: usize) {
+        self.terminal_width = width;
     }
-}
 
-pub struct Iter<'a, C: Delegate>
-where
-    C: 'a,
-{
-    editor: &'a mut Editor,
-    delegate: &'a C,
-}
-
-impl<'a, C: Delegate> Iterator for Iter<'a, C> {
-    type Item = Result<String>;
-
-    fn next(&mut self) -> Option<Result<String>> {
-        let readline = self.editor.readline(self.delegate);
-        match readline {
-            Ok(l) => {
-                self.editor.add_history_entry(l.as_ref()); // TODO Validate
-                Some(Ok(l))
+    pub fn render(&mut self, writer: &mut Write) {
+        // precondition: cursor is at (0,0)
+        let num_lines = self.buffer.len();
+        for (index, line) in self.buffer.iter().enumerate() {
+            let can_reuse_line = {
+                if let Some(previous_render) = self.last_rendered.get(index) {
+                    if previous_render == line {
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            };
+            if !can_reuse_line {
+                write!(writer, "{}", termion::clear::CurrentLine);
+                write!(writer, "{}", line);
             }
-            Err(error::ReadlineError::Eof) => None,
-            e @ Err(_) => Some(e),
+            write!(writer, "\r\n");
         }
+        write!(writer, "{}", termion::cursor::Up(num_lines as u16));
+        self.last_rendered.clear();
+        self.last_rendered.append(&mut self.buffer);
+        // postcondition: cursor is at (0,0)
+    }
+
+    pub fn add_row(&mut self, row: &Row) -> Option<usize> {
+        use std::fmt::Write;
+        let mut current_style = Style::NORMAL;
+        let mut output = String::new();
+        write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
+        let mut cursor_position = None;
+        let row_width = {
+            if row.columns.len() == 1 {
+                self.terminal_width
+            } else {
+                max(120, self.terminal_width)
+            }
+        };
+        assert!(row.width() <= self.terminal_width);
+        let total_cols = row.columns.len();
+        let mut remaining_width = row_width;
+        for (col_index, col) in row.columns.iter().enumerate() {
+            let column_width = remaining_width / (total_cols - col_index);
+            remaining_width -= column_width;
+            let begin = col_index * column_width;
+            let end = col_index * column_width + column_width;
+            let (left_start, center_start, right_start) = {
+                if col.center.width() == 0 && col.right.width() == 0 {
+                    (begin, end, end)
+                } else if col.center.width() == 0 && col.right.width() > 0 {
+                    (begin, begin + col.left.width(), end - col.right.width())
+                } else if col.center.width() > 0 && col.right.width() == 0 {
+                    (begin, begin + col.left.width() + (column_width - col.left.width()) / 2, end)
+                } else if col.center.width() > 0 && col.right.width() > 0 {
+                    let r = end - col.right.width();
+                    (begin, begin + (r - begin - col.center.width()) / 2, r)
+                } else {
+                    panic!("cannot reach case")
+                }
+            };
+            let left_end = left_start + col.left.width();
+            let center_end = center_start + col.center.width();
+            let right_end = right_start + col.right.width();
+            assert!(left_start >= begin);
+            assert!(center_start >= left_end);
+            assert!(right_start >= center_end);
+            assert!(end >= right_end);
+            assert!((left_start - begin) + (center_start - left_end) + (right_start - center_end) + (end - right_end) + col.width() == column_width);
+            for x in begin..left_start {
+                write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
+                write!(&mut output, " ");
+            }
+            current_style = self.render_displaystring(&col.left, current_style, &mut output);
+            for x in left_end..center_start {
+                write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
+                write!(&mut output, " ");
+            }
+            current_style = self.render_displaystring(&col.center, current_style, &mut output);
+            for x in center_end..right_start {
+                write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
+                write!(&mut output, " ");
+            }
+            current_style = self.render_displaystring(&col.right, current_style, &mut output);
+            for x in right_end..end {
+                write!(&mut output, " ");
+            }
+            if let Some(left_pos) = col.left.cursor {
+                assert!(cursor_position.is_none());
+                cursor_position = Some(left_start + left_pos);
+            }
+            if let Some(center_pos) = col.center.cursor {
+                assert!(cursor_position.is_none());
+                cursor_position = Some(center_start + center_pos);
+            }
+            if let Some(right_pos) = col.right.cursor {
+                assert!(cursor_position.is_none());
+                cursor_position = Some(right_start + right_pos)
+            }
+        }
+        current_style = Style::update(current_style, Style::NORMAL, &mut output).expect("failed to update style");
+        write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
+        self.buffer.push(output);
+        cursor_position
+    }
+
+    fn render_displaystring(&self, string: &DisplayString, mut style: Style, mut writer: &mut fmt::Write) -> Style {
+        use std::fmt::Write;
+        for component in &string.components {
+            write!(&mut writer, "{}", component.color);
+            style = Style::update(style, component.style, &mut writer).expect("failed to update style");
+            write!(&mut writer, "{}", component.text);
+        };
+        style
     }
 }

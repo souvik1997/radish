@@ -133,37 +133,6 @@ impl ShellState {
         self.current_job_pid.write().unwrap().set(None);
         Ok(())
     }
-
-    pub fn readline(&mut self) -> readline::Result<String> {
-        readline::Editor::new().readline(self)
-    }
-}
-
-impl readline::delegate::Delegate for ShellState {
-    fn complete(&self, _line: &str, _pos: usize) -> readline::Result<(usize, Vec<String>)> {
-        Ok((0, Vec::new()))
-    }
-
-    fn prompt(&self, color: bool) -> String {
-        let cwd = {
-            match env::current_dir() {
-                Ok(x) => String::from(x.to_str().unwrap_or("(none)")),
-                Err(e) => format!("(error: {:?})", e),
-            }
-        };
-        let username = users::get_current_username().unwrap_or(String::from("(none)"));
-        let last_character = if users::get_current_uid() == 0 {
-            "#"
-        } else {
-            "$"
-        };
-        String::from(format!(
-            "{username}@{cwd}{last_character} ",
-            username = Colour::Red.normal().paint(username).to_string(),
-            cwd = Colour::Green.normal().paint(cwd).to_string(),
-            last_character = last_character
-        ))
-    }
 }
 
 impl jobs::BuiltinHandler for ShellState {
