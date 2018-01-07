@@ -1,20 +1,10 @@
 use super::*;
 
 use std::collections::{vec_deque, VecDeque};
-use std::io::{BufRead, BufReader, Error, ErrorKind};
-use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::iter::IntoIterator;
 use std::ops::Index;
 use std::ops::IndexMut;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Sender};
-use std::thread::{sleep, spawn, JoinHandle};
-use std::time::Duration;
 use shell::history::History;
-
-use self::bytecount::count;
 
 const DEFAULT_MAX_SIZE: usize = 1000;
 
@@ -27,12 +17,11 @@ pub struct HistoryManager<'a> {
 }
 
 impl<'a> HistoryManager<'a> {
-
     /// Create new History structure.
     pub fn new(history_instance: Option<&'a History>) -> HistoryManager {
         HistoryManager {
             buffers: VecDeque::with_capacity(DEFAULT_MAX_SIZE),
-            history_instance: history_instance
+            history_instance: history_instance,
         }
     }
 
@@ -64,7 +53,7 @@ impl<'a> HistoryManager<'a> {
     }
 }
 
-impl<'a, 'b:'a> IntoIterator for &'a HistoryManager<'b> {
+impl<'a, 'b: 'a> IntoIterator for &'a HistoryManager<'b> {
     type Item = &'a Buffer;
     type IntoIter = vec_deque::Iter<'a, Buffer>;
 

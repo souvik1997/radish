@@ -5,11 +5,9 @@ pub struct Completer<'a> {
 
 impl<'a> Completer<'a> {
     pub fn new(history: &'a History) -> Completer<'a> {
-        Completer {
-            history: history
-        }
+        Completer { history: history }
     }
-    pub fn completions(&self, start: &str, line: &[char]) -> Vec<String> {
+    pub fn completions(&self, _start: &str, _line: &[char]) -> Vec<String> {
         Vec::new()
     }
 }

@@ -19,7 +19,10 @@ pub struct Emacs<'a> {
 
 impl<'a> Emacs<'a> {
     pub fn new(ed: Editor<'a>) -> Self {
-        Emacs { ed, last_arg_fetch_index: None }
+        Emacs {
+            ed,
+            last_arg_fetch_index: None,
+        }
     }
 
     fn handle_ctrl_key(&mut self, c: char) -> ReadlineEvent {
@@ -68,7 +71,9 @@ impl<'a> Emacs<'a> {
         let history_index = match self.last_arg_fetch_index {
             Some(0) => return ReadlineEvent::Continue,
             Some(x) => x - 1,
-            None => self.ed.current_history_location().unwrap_or(self.ed.history.len() - 1),
+            None => self.ed
+                .current_history_location()
+                .unwrap_or(self.ed.history.len() - 1),
         };
 
         // If did a last arg fetch just before this, we need to delete it so it can be replaced by
@@ -96,7 +101,7 @@ impl<'a> Emacs<'a> {
 impl<'a> KeyMap<'a, Emacs<'a>> for Emacs<'a> {
     fn handle_key_core(&mut self, key: Key) -> ReadlineEvent {
         match key {
-            Key::Alt('.') => {},
+            Key::Alt('.') => {}
             _ => self.last_arg_fetch_index = None,
         }
 
@@ -117,11 +122,11 @@ impl<'a> KeyMap<'a, Emacs<'a>> for Emacs<'a> {
         }
     }
 
-    fn editor_mut(&mut self) ->  &mut Editor<'a> {
+    fn editor_mut(&mut self) -> &mut Editor<'a> {
         &mut self.ed
     }
 
-    fn editor(&self) ->  &Editor<'a> {
+    fn editor(&self) -> &Editor<'a> {
         &self.ed
     }
 }
@@ -142,26 +147,22 @@ fn emacs_move_word(ed: &mut Editor, direction: EmacsMoveDir) -> ReadlineEvent {
     let (words, pos) = ed.get_words_and_cursor_position();
 
     let word_index = match pos {
-        CursorPosition::InWord(i) => {
-            Some(i)
-        },
+        CursorPosition::InWord(i) => Some(i),
         CursorPosition::OnWordLeftEdge(mut i) => {
             if i > 0 && direction == EmacsMoveDir::Left {
                 i -= 1;
             }
             Some(i)
-        },
+        }
         CursorPosition::OnWordRightEdge(mut i) => {
             if i < words.len() - 1 && direction == EmacsMoveDir::Right {
                 i += 1;
             }
             Some(i)
-        },
-        CursorPosition::InSpace(left, right) => {
-            match direction {
-                EmacsMoveDir::Left => left,
-                EmacsMoveDir::Right => right,
-            }
+        }
+        CursorPosition::InSpace(left, right) => match direction {
+            EmacsMoveDir::Left => left,
+            EmacsMoveDir::Right => right,
         },
     };
 

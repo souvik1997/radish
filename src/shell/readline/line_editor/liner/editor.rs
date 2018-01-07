@@ -1,7 +1,5 @@
 use std::cmp;
-use std::rc::Rc;
 use shell::readline::ReadlineEvent;
-
 
 use super::Buffer;
 use super::event::*;
@@ -106,7 +104,7 @@ impl<'a> Editor<'a> {
     pub fn new_with_init_buffer<B: Into<Buffer>>(
         buffer: B,
         history: Option<&'a History>,
-        completer: Option<&'a Completer<'a>>
+        completer: Option<&'a Completer<'a>>,
     ) -> Self {
         let mut ed = Editor {
             cursor: 0,
@@ -116,7 +114,7 @@ impl<'a> Editor<'a> {
             show_autosuggestions: true,
             no_eol: false,
             history: HistoryManager::new(history),
-            completer: completer
+            completer: completer,
         };
 
         if !ed.new_buf.is_empty() {
@@ -180,7 +178,7 @@ impl<'a> Editor<'a> {
     pub fn complete(&mut self, handler: &mut EventHandler) -> ReadlineEvent {
         handler(Event::new(self, EventKind::BeforeComplete));
 
-        let (word, completions) = {
+        let (_word, completions) = {
             let word_range = self.get_word_before_cursor(false);
             let buf = cur_buf_mut!(self);
 
@@ -265,10 +263,7 @@ impl<'a> Editor<'a> {
     /// this method ignores that space until it finds a word.
     /// If `ignore_space_before_cursor` is false and there is space directly before the cursor,
     /// nothing is deleted.
-    pub fn delete_word_before_cursor(
-        &mut self,
-        ignore_space_before_cursor: bool,
-    ) -> ReadlineEvent {
+    pub fn delete_word_before_cursor(&mut self, ignore_space_before_cursor: bool) -> ReadlineEvent {
         if let Some((start, _)) = self.get_word_before_cursor(ignore_space_before_cursor) {
             let moved = cur_buf_mut!(self).remove(start, self.cursor);
             self.cursor -= moved;
@@ -501,7 +496,7 @@ impl<'a> Editor<'a> {
         if self.show_autosuggestions {
             {
                 let autosuggestion = self.current_autosuggestion().cloned();
-                let mut buf = self.current_buffer_mut();
+                let buf = self.current_buffer_mut();
                 if let Some(x) = autosuggestion {
                     buf.insert_from_buffer(&x);
                 }

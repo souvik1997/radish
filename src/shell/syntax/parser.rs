@@ -1,9 +1,6 @@
-use nom::*;
 use super::tokens::*;
 use super::ast::*;
-use std::str::FromStr;
 use std::rc::Rc;
-use std::os::unix::io::RawFd;
 
 #[derive(Debug)]
 pub enum Error {

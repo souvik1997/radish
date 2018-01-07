@@ -1,14 +1,9 @@
-use super::readline;
 use super::syntax::ast::Expr;
 use std::env;
-extern crate ansi_term;
 extern crate users;
-use self::ansi_term::Colour;
 pub mod jobs;
 use std::cell::Cell;
 use std::path::PathBuf;
-use std::collections::HashMap;
-use std::rc::Rc;
 use std::ops::DerefMut;
 use std::time;
 use std::process;
@@ -24,7 +19,7 @@ pub struct ShellState {
     foreground_jobs: Arc<RwLock<Vec<jobs::Job>>>,
     stopped_jobs: Arc<RwLock<Vec<jobs::Job>>>,
     current_job_pid: RwLock<Cell<Option<nix::libc::pid_t>>>,
-    lua: RwLock<Lua>
+    lua: RwLock<Lua>,
 }
 
 impl ShellState {
@@ -34,7 +29,7 @@ impl ShellState {
             foreground_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
             stopped_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
             current_job_pid: RwLock::new(Cell::new(None)),
-            lua: RwLock::new(Lua::new())
+            lua: RwLock::new(Lua::new()),
         }
     }
 
@@ -270,7 +265,8 @@ impl jobs::BuiltinHandler for ShellState {
                     if name == "fg" {
                         self.foreground_jobs.write().unwrap().push(job);
                     } else {
-                        job.cont(true);
+                        job.cont(true)
+                            .expect("failed to continue job in background");
                         bg_jobs.push(job);
                     }
                     0
@@ -279,9 +275,7 @@ impl jobs::BuiltinHandler for ShellState {
                     -1
                 }
             }
-            _ => {
-                -1
-            }
+            _ => -1,
         }
     }
 
@@ -315,12 +309,16 @@ fn background_reaper(
             jobs::Status::NotStarted => {
                 panic!("found job in bg queue that has not been started");
             }
-            jobs::Status::Started(pid, _, status) => {
+            jobs::Status::Started(_, _, status) => {
                 match status {
                     nix::sys::wait::WaitStatus::StillAlive
                     | nix::sys::wait::WaitStatus::Continued(_) => {
-                        job.wait(Some(nix::sys::wait::WUNTRACED | nix::sys::wait::WNOHANG));
-                        new_bg_jobs.push(job);
+                        match job.wait(Some(nix::sys::wait::WUNTRACED | nix::sys::wait::WNOHANG)) {
+                            Ok(_) => {
+                                new_bg_jobs.push(job);
+                            }
+                            Err(_) => {} // silently drop and kill job
+                        }
                     }
                     nix::sys::wait::WaitStatus::Stopped(_, _) => {
                         st_jobs.push(job);

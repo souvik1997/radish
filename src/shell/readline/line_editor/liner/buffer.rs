@@ -3,7 +3,7 @@ use std::iter::FromIterator;
 use std::fmt::{self, Write as FmtWrite};
 
 /// A modification performed on a `Buffer`. These are used for the purpose of undo/redo.
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum Action {
     Insert { start: usize, text: Vec<char> },
     Remove { start: usize, text: Vec<char> },
@@ -171,7 +171,10 @@ impl Buffer {
     }
 
     pub fn last_arg(&self) -> Option<&[char]> {
-        self.data.split(|&c| c == ' ').filter(|s| !s.is_empty()).last()
+        self.data
+            .split(|&c| c == ' ')
+            .filter(|s| !s.is_empty())
+            .last()
     }
 
     pub fn num_chars(&self) -> usize {
@@ -235,11 +238,17 @@ impl Buffer {
     }
 
     pub fn range_width(&self, start: usize, end: usize) -> Vec<usize> {
-        self.range(start, end).split('\n').map(|s| s.width()).collect()
+        self.range(start, end)
+            .split('\n')
+            .map(|s| s.width())
+            .collect()
     }
 
     pub fn lines(&self) -> Vec<String> {
-        self.data.split(|&c| c == '\n').map(|s| s.iter().cloned().collect()).collect()
+        self.data
+            .split(|&c| c == '\n')
+            .map(|s| s.iter().cloned().collect())
+            .collect()
     }
 
     pub fn chars(&self) -> ::std::slice::Iter<char> {

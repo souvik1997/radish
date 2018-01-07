@@ -3,12 +3,12 @@ use super::Editor;
 
 pub type EventHandler<'a> = FnMut(Event) + 'a;
 
-pub struct Event<'a, 'b:'a> {
+pub struct Event<'a, 'b: 'a> {
     pub editor: &'a mut Editor<'b>,
     pub kind: EventKind,
 }
 
-impl<'a, 'b:'a> Event<'a, 'b> {
+impl<'a, 'b: 'a> Event<'a, 'b> {
     pub fn new(editor: &'a mut Editor<'b>, kind: EventKind) -> Self {
         Event {
             editor: editor,

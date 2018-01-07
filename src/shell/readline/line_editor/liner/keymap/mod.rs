@@ -9,8 +9,6 @@ pub trait KeyMap<'a, T>: From<T> {
     fn editor_mut(&mut self) -> &mut Editor<'a>;
 
     fn handle_key(&mut self, mut key: Key, handler: &mut EventHandler) -> ReadlineEvent {
-        let mut done = false;
-
         handler(Event::new(self.editor_mut(), EventKind::BeforeKey(key)));
 
         let is_empty = self.editor().current_buffer().is_empty();
@@ -35,8 +33,10 @@ pub trait KeyMap<'a, T>: From<T> {
             Key::Ctrl('f') if self.editor().is_currently_showing_autosuggestion() => {
                 self.editor_mut().accept_autosuggestion()
             }
-            Key::Right if self.editor().is_currently_showing_autosuggestion() &&
-                          self.editor().cursor_is_at_end_of_line() => {
+            Key::Right
+                if self.editor().is_currently_showing_autosuggestion()
+                    && self.editor().cursor_is_at_end_of_line() =>
+            {
                 self.editor_mut().accept_autosuggestion()
             }
             _ => {

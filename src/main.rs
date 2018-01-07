@@ -1,12 +1,7 @@
 #![feature(collections_range)]
 
-extern crate libc;
-extern crate log;
 #[macro_use]
 extern crate nom;
-
-#[macro_use]
-extern crate lazy_static;
 
 #[macro_use]
 extern crate bitflags;

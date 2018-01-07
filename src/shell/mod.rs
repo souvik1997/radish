@@ -7,7 +7,6 @@ use self::state::ShellState;
 use self::history::History;
 use self::completion::Completer;
 use nom;
-use std::process;
 use nix;
 use std::io::stdin;
 use std::os::unix::io::AsRawFd;
@@ -27,7 +26,8 @@ impl TerminalFgGroupManager {
                 let t = TerminalFgGroupManager {
                     stdin_group: stdin_group,
                 };
-                nix::unistd::tcsetpgrp(stdin().as_raw_fd(), group).expect("failed to tcsetpgrp stdin");
+                nix::unistd::tcsetpgrp(stdin().as_raw_fd(), group)
+                    .expect("failed to tcsetpgrp stdin");
                 Some(t)
             }
             Err(_) => None,
@@ -36,7 +36,8 @@ impl TerminalFgGroupManager {
 }
 impl Drop for TerminalFgGroupManager {
     fn drop(&mut self) {
-        nix::unistd::tcsetpgrp(stdin().as_raw_fd(), self.stdin_group).expect("failed to reset tcsetpgrp");
+        nix::unistd::tcsetpgrp(stdin().as_raw_fd(), self.stdin_group)
+            .expect("failed to reset tcsetpgrp");
     }
 }
 
@@ -95,7 +96,7 @@ impl Shell {
             nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGQUIT, &block_sigaction)
                 .expect("failed to ignore SIGQUIT");
         }
-        let reaper = state.start_background_reaper();
+        let _reaper = state.start_background_reaper();
         loop {
             let input = rl.read(&completer, &history);
             match input {
@@ -108,13 +109,12 @@ impl Shell {
                                 match syntax::parser::parse(&tokens) {
                                     Ok(expr) => match state.enqueue_job(&expr) {
                                         Ok(()) => {
-                                            state.run_foreground_jobs();
+                                            state
+                                                .run_foreground_jobs()
+                                                .expect("failed to run foreground jobs");
                                         }
                                         Err(error) => {
-                                            println!(
-                                                "error when constructing job: {:?}",
-                                                error
-                                            );
+                                            println!("error when constructing job: {:?}", error);
                                         }
                                     },
                                     Err(error) => {

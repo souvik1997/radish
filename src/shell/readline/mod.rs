@@ -1,29 +1,20 @@
-extern crate termion;
 extern crate nix;
+extern crate termion;
 mod editor;
 use self::editor::Editor;
 mod display;
 use self::display::*;
 use self::unicode_width::UnicodeWidthStr;
 mod line_editor;
-use std::io::{stdout, stdin, self, Read, Write};
+use std::io::{self, stdin, stdout, Write};
 use std::fmt;
-use std::sync::mpsc::{channel, Sender, Receiver};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
 use std::cmp::max;
-use std::thread;
 use super::history::History;
 use super::completion::Completer;
 use self::termion::input::TermRead;
 use self::termion::raw::IntoRawMode;
 
-use self::termion::cursor::DetectCursorPos;
-
-
-pub struct Readline {
-
-}
+pub struct Readline {}
 
 pub enum ReadlineEvent {
     ClearScreen,
@@ -37,13 +28,11 @@ pub enum ReadlineEvent {
 
 impl Readline {
     pub fn new() -> Readline {
-        Readline {
-
-        }
+        Readline {}
     }
 
     pub fn read(&mut self, completer: &Completer, history: &History) -> Option<String> {
-        let mut result = None;
+        let result;
         loop {
             let res = self.read_impl(completer, history);
             println!("");
@@ -51,46 +40,53 @@ impl Readline {
                 Ok(string) => {
                     result = Some(string);
                     break;
-                },
-                Err(event) => {
-                    match event {
-                        ReadlineEvent::ClearScreen => {
-
-                        },
-                        ReadlineEvent::Eof => {
-                            return None;
-                        },
-                        ReadlineEvent::Interrupted => {
-
-                        },
-                        _ => {
-                            panic!("unexpected event");
-                        }
-                    }
                 }
+                Err(event) => match event {
+                    ReadlineEvent::ClearScreen => {}
+                    ReadlineEvent::Eof => {
+                        return None;
+                    }
+                    ReadlineEvent::Interrupted => {}
+                    _ => {
+                        panic!("unexpected event");
+                    }
+                },
             }
         }
         result
     }
 
-    fn render(&self, editor: &mut Editor, cursor: &mut CursorManager, term_buffer: &mut TerminalBuffer, terminal_width: usize, mut stdout: &mut Write) {
+    fn render(
+        &self,
+        editor: &mut Editor,
+        cursor: &mut CursorManager,
+        term_buffer: &mut TerminalBuffer,
+        terminal_width: usize,
+        mut stdout: &mut Write,
+    ) {
         term_buffer.set_width(terminal_width);
-        let (saved_x, saved_y) = cursor.position();
         let new_position = {
             let mut index = 0;
             let mut cursor_position: Option<(u16, u16)> = None;
-            editor.render(&mut |ref row| {
-                if let Some(row_cursor_position) = term_buffer.add_row(row) {
-                    assert!(cursor_position.is_none());
-                    cursor_position = Some((row_cursor_position as u16, index as u16))
-                }
-                index += 1;
-            }, terminal_width);
+            editor.render(
+                &mut |ref row| {
+                    if let Some(row_cursor_position) =
+                        term_buffer.add_row(row).expect("failed to write to stdout")
+                    {
+                        assert!(cursor_position.is_none());
+                        cursor_position = Some((row_cursor_position as u16, index as u16))
+                    }
+                    index += 1;
+                },
+                terminal_width,
+            );
             cursor_position
         };
         cursor.set_hidden(&mut stdout, true);
         cursor.move_to(&mut stdout, 0, 0);
-        term_buffer.render(&mut stdout);
+        term_buffer
+            .render(&mut stdout)
+            .expect("failed to write buffer to stdout");
         if let Some((x, y)) = new_position {
             cursor.move_to(&mut stdout, x, y);
             cursor.set_hidden(&mut stdout, false);
@@ -101,31 +97,42 @@ impl Readline {
         stdout.flush().expect("failed to flush stdout");
     }
 
-    fn read_impl(&mut self, completer: &Completer, history: &History) -> Result<String, ReadlineEvent> {
+    fn read_impl(
+        &mut self,
+        completer: &Completer,
+        history: &History,
+    ) -> Result<String, ReadlineEvent> {
         let mut editor = Editor::new(completer, history);
         let mut term_buffer = TerminalBuffer::new();
         let mut stdout = stdout().into_raw_mode().expect("failed to set raw mode");
         let mut cursor = CursorManager::new();
-        let (mut terminal_width, mut terminal_height) = termion::terminal_size().expect("failed to get terminal size");
-        let stdout_err_msg = "failed to write to stdout";
+        let (mut terminal_width, mut terminal_height) =
+            termion::terminal_size().expect("failed to get terminal size");
         let mut result = Err(ReadlineEvent::Interrupted);
         let stdin = stdin();
-        self.render(&mut editor, &mut cursor, &mut term_buffer, terminal_width as usize, &mut stdout);
+        self.render(
+            &mut editor,
+            &mut cursor,
+            &mut term_buffer,
+            terminal_width as usize,
+            &mut stdout,
+        );
         for key in stdin.keys() {
             // input
             if let Ok(key) = key {
                 match editor.handle_input(key) {
-                    ReadlineEvent::Continue => {},
+                    ReadlineEvent::Continue => {}
                     ReadlineEvent::Done => {
                         result = Ok(editor.buffer());
                         break;
-                    },
+                    }
                     other => {
                         result = Err(other);
                         break;
                     }
                 }
-                let (new_terminal_width, new_terminal_height) = termion::terminal_size().expect("failed to get terminal size");
+                let (new_terminal_width, new_terminal_height) =
+                    termion::terminal_size().expect("failed to get terminal size");
                 if new_terminal_width != terminal_width || new_terminal_height != terminal_height {
                     terminal_width = new_terminal_width;
                     terminal_height = new_terminal_height;
@@ -134,10 +141,22 @@ impl Readline {
                 break;
             }
             // render
-            self.render(&mut editor, &mut cursor, &mut term_buffer, terminal_width as usize, &mut stdout);
+            self.render(
+                &mut editor,
+                &mut cursor,
+                &mut term_buffer,
+                terminal_width as usize,
+                &mut stdout,
+            );
         }
         cursor.move_to(&mut stdout, 0, 0);
-        self.render(&mut editor, &mut cursor, &mut term_buffer, terminal_width as usize, &mut stdout);
+        self.render(
+            &mut editor,
+            &mut cursor,
+            &mut term_buffer,
+            terminal_width as usize,
+            &mut stdout,
+        );
         cursor.move_to(&mut stdout, 0, 0);
         result
     }
@@ -162,7 +181,9 @@ impl CursorManager {
         (self.xpos, self.ypos)
     }
 
-    pub fn is_hidden(&self) -> bool { self.hidden }
+    pub fn is_hidden(&self) -> bool {
+        self.hidden
+    }
 
     pub fn set_hidden<W: io::Write>(&mut self, writer: &mut W, hidden: bool) {
         self.hidden = hidden;
@@ -211,7 +232,7 @@ impl TerminalBuffer {
         self.terminal_width = width;
     }
 
-    pub fn render(&mut self, writer: &mut Write) {
+    pub fn render(&mut self, writer: &mut Write) -> io::Result<()> {
         // precondition: cursor is at (0,0)
         let num_lines = self.buffer.len();
         for (index, line) in self.buffer.iter().enumerate() {
@@ -227,21 +248,30 @@ impl TerminalBuffer {
                 }
             };
             if !can_reuse_line {
-                write!(writer, "{}", termion::clear::CurrentLine);
-                write!(writer, "{}", line);
+                write!(writer, "{}", termion::clear::CurrentLine)?;
+                write!(writer, "{}", line)?;
             }
-            write!(writer, "\r\n");
+            write!(writer, "\r\n")?;
         }
-        write!(writer, "{}", termion::cursor::Up(num_lines as u16));
+        write!(writer, "{}", termion::cursor::Up(num_lines as u16))?;
         self.last_rendered.clear();
         self.last_rendered.append(&mut self.buffer);
         // postcondition: cursor is at (0,0)
+        Ok(())
     }
 
-    pub fn add_row(&mut self, row: &Row) -> Option<usize> {
+    pub fn add_row(&mut self, row: &Row) -> Result<Option<usize>, fmt::Error> {
         use std::fmt::Write;
         let mut output = String::new();
-        write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
+        write!(
+            output,
+            "{}{}",
+            Color::new(
+                color::Mode::Normal(color::Base::Reset),
+                color::Mode::Normal(color::Base::Reset)
+            ),
+            Style::NORMAL
+        )?;
         let mut cursor_position = None;
         let row_width = {
             if row.columns.len() == 1 {
@@ -264,7 +294,11 @@ impl TerminalBuffer {
                 } else if col.center.width() == 0 && col.right.width() > 0 {
                     (begin, begin + col.left.width(), end - col.right.width())
                 } else if col.center.width() > 0 && col.right.width() == 0 {
-                    (begin, begin + col.left.width() + (column_width - col.left.width()) / 2, end)
+                    (
+                        begin,
+                        begin + col.left.width() + (column_width - col.left.width()) / 2,
+                        end,
+                    )
                 } else if col.center.width() > 0 && col.right.width() > 0 {
                     let r = end - col.right.width();
                     (begin, begin + (r - begin - col.center.width()) / 2, r)
@@ -279,28 +313,69 @@ impl TerminalBuffer {
             assert!(center_start >= left_end);
             assert!(right_start >= center_end);
             assert!(end >= right_end);
-            assert!((left_start - begin) + (center_start - left_end) + (right_start - center_end) + (end - right_end) + col.width() == column_width);
-            for x in begin..left_start {
-                write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
-                write!(&mut output, " ");
+            assert!(
+                (left_start - begin) + (center_start - left_end) + (right_start - center_end)
+                    + (end - right_end) + col.width() == column_width
+            );
+            for _ in begin..left_start {
+                write!(
+                    output,
+                    "{}",
+                    Color::new(
+                        color::Mode::Normal(color::Base::Reset),
+                        color::Mode::Normal(color::Base::Reset)
+                    )
+                )?;
+                write!(&mut output, " ")?;
             }
-            self.render_displaystring(&col.left, &mut output);
-            write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
-            for x in left_end..center_start {
-                write!(&mut output, " ");
+            self.render_displaystring(&col.left, &mut output)?;
+            write!(
+                output,
+                "{}{}",
+                Color::new(
+                    color::Mode::Normal(color::Base::Reset),
+                    color::Mode::Normal(color::Base::Reset)
+                ),
+                Style::NORMAL
+            )?;
+            for _ in left_end..center_start {
+                write!(&mut output, " ")?;
             }
 
-            self.render_displaystring(&col.center, &mut output);
-            write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
-            for x in center_end..right_start {
-                write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
-                write!(&mut output, " ");
+            self.render_displaystring(&col.center, &mut output)?;
+            write!(
+                output,
+                "{}{}",
+                Color::new(
+                    color::Mode::Normal(color::Base::Reset),
+                    color::Mode::Normal(color::Base::Reset)
+                ),
+                Style::NORMAL
+            )?;
+            for _ in center_end..right_start {
+                write!(
+                    output,
+                    "{}",
+                    Color::new(
+                        color::Mode::Normal(color::Base::Reset),
+                        color::Mode::Normal(color::Base::Reset)
+                    )
+                )?;
+                write!(&mut output, " ")?;
             }
 
-            self.render_displaystring(&col.right, &mut output);
-            write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
-            for x in right_end..end {
-                write!(&mut output, " ");
+            self.render_displaystring(&col.right, &mut output)?;
+            write!(
+                output,
+                "{}{}",
+                Color::new(
+                    color::Mode::Normal(color::Base::Reset),
+                    color::Mode::Normal(color::Base::Reset)
+                ),
+                Style::NORMAL
+            )?;
+            for _ in right_end..end {
+                write!(&mut output, " ")?;
             }
             if let Some(left_pos) = col.left.cursor {
                 assert!(cursor_position.is_none());
@@ -315,15 +390,32 @@ impl TerminalBuffer {
                 cursor_position = Some(right_start + right_pos)
             }
         }
-        write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
+        write!(
+            output,
+            "{}{}",
+            Color::new(
+                color::Mode::Normal(color::Base::Reset),
+                color::Mode::Normal(color::Base::Reset)
+            ),
+            Style::NORMAL
+        )?;
         self.buffer.push(output);
-        cursor_position
+        Ok(cursor_position)
     }
 
-    fn render_displaystring(&self, string: &DisplayString, mut writer: &mut fmt::Write) {
+    fn render_displaystring(
+        &self,
+        string: &DisplayString,
+        mut writer: &mut fmt::Write,
+    ) -> fmt::Result {
         use std::fmt::Write;
         for component in &string.components {
-            write!(&mut writer, "{}{}{}", component.color, component.style, component.text);
-        };
+            write!(
+                &mut writer,
+                "{}{}{}",
+                component.color, component.style, component.text
+            )?;
+        }
+        Ok(())
     }
 }

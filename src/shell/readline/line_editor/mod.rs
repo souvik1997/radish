@@ -3,7 +3,6 @@ use super::termion;
 use super::super::completion::Completer;
 use super::super::history::History;
 use self::unicode_width::UnicodeWidthStr;
-use std::sync::{Arc, RwLock};
 
 mod liner;
 extern crate unicode_segmentation;
@@ -15,15 +14,17 @@ use super::ReadlineEvent;
 pub struct LineEditor<'a> {
     prompt: DisplayString<'a>,
     editor: liner::emacs::Emacs<'a>,
-    dirty: bool,
 }
 
 impl<'a> LineEditor<'a> {
-    pub fn new(prompt: DisplayString<'a>, completer: &'a Completer<'a>, history: &'a History) -> LineEditor<'a> {
+    pub fn new(
+        prompt: DisplayString<'a>,
+        completer: &'a Completer<'a>,
+        history: &'a History,
+    ) -> LineEditor<'a> {
         LineEditor {
             prompt: prompt,
             editor: liner::emacs::Emacs::new(liner::Editor::new(Some(history), Some(completer))),
-            dirty: true,
         }
     }
 
@@ -33,7 +34,6 @@ impl<'a> LineEditor<'a> {
 
     pub fn buffer(&'a self) -> &[char] {
         &self.editor.editor().current_buffer().data
-
     }
 
     pub fn cursor(&self) -> usize {
@@ -65,15 +65,17 @@ impl<'a> Render for LineEditor<'a> {
         let cursor_position = graphemes.len() + self.prompt.width();
 
         // word wrap line
-        let mut lines: Vec<Row> = vec![Row {
-            columns: vec![
-                Column {
-                    left: self.prompt.clone(),
-                    center: DisplayString::new(),
-                    right: DisplayString::new(),
-                }
-            ]
-        }];
+        let mut lines: Vec<Row> = vec![
+            Row {
+                columns: vec![
+                    Column {
+                        left: self.prompt.clone(),
+                        center: DisplayString::new(),
+                        right: DisplayString::new(),
+                    },
+                ],
+            },
+        ];
         if self.prompt.width() >= cursor_position {
             lines[0].columns[0].left.cursor = Some(cursor_position);
         }
@@ -84,13 +86,29 @@ impl<'a> Render for LineEditor<'a> {
                 let total_line_length = total_prev_length + total_length;
                 let component;
                 if index == 0 {
-                    component = DisplayStringComponent::new(word, Color::new(color::Mode::Normal(color::Base::White), color::Mode::Normal(color::Base::Reset)), Style::BOLD);
+                    component = DisplayStringComponent::new(
+                        word,
+                        Color::new(
+                            color::Mode::Normal(color::Base::White),
+                            color::Mode::Normal(color::Base::Reset),
+                        ),
+                        Style::BOLD,
+                    );
                 } else {
-                    component = DisplayStringComponent::new(word, Color::new(color::Mode::Normal(color::Base::Blue), color::Mode::Light(color::Base::Reset)), Style::NORMAL);
+                    component = DisplayStringComponent::new(
+                        word,
+                        Color::new(
+                            color::Mode::Normal(color::Base::Blue),
+                            color::Mode::Light(color::Base::Reset),
+                        ),
+                        Style::NORMAL,
+                    );
                 }
                 if total_length + component.width() >= width {
                     let component_cursor;
-                    if cursor_position > total_line_length && total_line_length + component.width() >= cursor_position {
+                    if cursor_position > total_line_length
+                        && total_line_length + component.width() >= cursor_position
+                    {
                         component_cursor = Some(cursor_position - total_line_length);
                     } else {
                         component_cursor = None;
@@ -105,15 +123,18 @@ impl<'a> Render for LineEditor<'a> {
                                 },
                                 center: DisplayString::new(),
                                 right: DisplayString::new(),
-                            }
-                        ]
+                            },
+                        ],
                     });
                 } else {
                     let last_index = lines.len() - 1;
                     let row = &mut lines[last_index];
-                    if cursor_position > total_line_length && total_line_length + component.width() >= cursor_position {
+                    if cursor_position > total_line_length
+                        && total_line_length + component.width() >= cursor_position
+                    {
                         assert!(row.columns[0].left.cursor.is_none());
-                        row.columns[0].left.cursor = Some((cursor_position - total_line_length) + total_length);
+                        row.columns[0].left.cursor =
+                            Some((cursor_position - total_line_length) + total_length);
                     }
                     row.columns[0].left.components.push(component);
                 }

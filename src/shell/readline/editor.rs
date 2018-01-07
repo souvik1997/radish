@@ -6,7 +6,6 @@ use super::super::history::History;
 use super::super::completion::Completer;
 use self::termion::event::Key;
 
-
 pub struct Editor<'a> {
     line_editor: LineEditor<'a>,
     completer: &'a Completer<'a>,
@@ -26,11 +25,13 @@ impl<'a> Editor<'a> {
     }
 
     pub fn buffer(&self) -> String {
-        self.line_editor.buffer().iter().cloned().collect::<String>()
+        self.line_editor
+            .buffer()
+            .iter()
+            .cloned()
+            .collect::<String>()
     }
-
 }
-
 
 impl<'a> Render for Editor<'a> {
     fn render<F: FnMut(&Row)>(&mut self, render_fn: &mut F, width: usize) {

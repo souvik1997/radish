@@ -3,12 +3,9 @@ use nix;
 use std::ffi::CString;
 use super::super::syntax::ast::{Argument, Expr};
 use super::super::syntax::tokens::StringLiteralComponent;
-use super::ShellState;
 use std::collections::HashMap;
-use std::rc::Rc;
 use std::path::PathBuf;
 use std::env;
-use std::fmt;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::fs;
 use std::fs::File;
@@ -16,7 +13,7 @@ use std::io::prelude::*;
 use std::io::{stdin, stdout};
 use std::os::unix::io::AsRawFd;
 use std::ops::Deref;
-use std::sync::{RwLock, RwLockReadGuard};
+use std::sync::RwLock;
 extern crate glob;
 use self::glob::glob;
 
@@ -316,11 +313,16 @@ impl Job {
             nix::sys::signal::SigSet::empty(),
         );
         unsafe {
-            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &block_sigaction).expect("failed to block SIGTTOU");
-            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &block_sigaction).expect("failed to block SIGTTIN");
-            nix::unistd::tcsetpgrp(stdin().as_raw_fd(), pgid).expect("failed to reset terminal group");
-            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &default_sigaction).expect("failed to restore SIGTTOU");
-            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &default_sigaction).expect("failed to restore SIGTTIN");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &block_sigaction)
+                .expect("failed to block SIGTTOU");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &block_sigaction)
+                .expect("failed to block SIGTTIN");
+            nix::unistd::tcsetpgrp(stdin().as_raw_fd(), pgid)
+                .expect("failed to reset terminal group");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTOU, &default_sigaction)
+                .expect("failed to restore SIGTTOU");
+            nix::sys::signal::sigaction(nix::sys::signal::Signal::SIGTTIN, &default_sigaction)
+                .expect("failed to restore SIGTTIN");
         }
     }
 
@@ -339,7 +341,8 @@ impl Job {
         match self.get_status() {
             Status::NotStarted => false,
             Status::Started(_, pgid, _) => {
-                let current_pgid = nix::unistd::tcgetpgrp(stdin().as_raw_fd()).expect("failed to tcgetpgrp stdin");
+                let current_pgid =
+                    nix::unistd::tcgetpgrp(stdin().as_raw_fd()).expect("failed to tcgetpgrp stdin");
                 pgid == current_pgid
             }
         }
@@ -605,7 +608,9 @@ impl Job {
                                         nix::unistd::setpgid(child, child_pgid)
                                             .expect("failed to set process group for child");
                                         if !self.background {
-                                            if let Ok(existing_group) = nix::unistd::tcgetpgrp(stdin().as_raw_fd()) {
+                                            if let Ok(existing_group) =
+                                                nix::unistd::tcgetpgrp(stdin().as_raw_fd())
+                                            {
                                                 if existing_group != child_pgid {
                                                     nix::unistd::tcsetpgrp(stdin().as_raw_fd(), child_pgid)
                                                         .expect("failed to tcsetpgrp stdin");
@@ -628,14 +633,16 @@ impl Job {
                                         });
                                         if success {
                                             if let Some(child_pgid) = pgid {
-                                                nix::unistd::setpgid(0 /* self */, child_pgid).expect(
-                                                    "failed to setpgid to child pgid in child",
-                                                );
+                                                nix::unistd::setpgid(0 /* self */, child_pgid)
+                                                    .expect(
+                                                        "failed to setpgid to child pgid in child",
+                                                    );
                                             } else {
                                                 let child_pid = nix::unistd::getpid();
-                                                nix::unistd::setpgid(0 /* self */, child_pid).expect(
-                                                    "failed to setpgid to child pid in child",
-                                                );
+                                                nix::unistd::setpgid(0 /* self */, child_pid)
+                                                    .expect(
+                                                        "failed to setpgid to child pid in child",
+                                                    );
                                                 //nix::unistd::setsid().expect("failed to create new session/process group in child");
                                             }
                                             let default_sigaction =
