@@ -229,27 +229,21 @@ bitflags! {
         const NORMAL = 0x0;
     }
 }
-
-impl Style {
-    pub fn update<W: Write>(me: Self, other: Self, f: &mut W) -> Result<Self, ::std::fmt::Error> {
-        let mut result = Ok(me);
-
-        if (other & Self::BOLD == Self::BOLD) && (me & Self::BOLD == Self::NORMAL) {
-            result = result.and(write!(f, "{}", termion::style::Bold).map(|_| me | Self::BOLD));
-        } else if (other & Self::BOLD == Self::NORMAL) && (me & Self::BOLD == Self::BOLD) {
-            result = result.and(write!(f, "{}", termion::style::NoBold).map(|_| me & !Self::BOLD));
-        }
-
-        if (other & Self::ITALIC == Self::ITALIC) && (me & Self::ITALIC == Self::NORMAL) {
-            result = result.and(write!(f, "{}", termion::style::Italic).map(|_| me | Self::ITALIC));
-        } else if (other & Self::ITALIC == Self::ITALIC) && (me & Self::ITALIC == Self::NORMAL) {
-            result = result.and(write!(f, "{}", termion::style::NoItalic).map(|_| me & !Self::ITALIC));
-        }
-
-        if (other & Self::UNDERLINE == Self::UNDERLINE) && (me & Self::UNDERLINE == Self::NORMAL) {
-            result = result.and(write!(f, "{}", termion::style::Underline).map(|_| me | Self::UNDERLINE));
-        } else if (other & Self::UNDERLINE == Self::NORMAL) && (me & Self::UNDERLINE == Self::UNDERLINE) {
-            result = result.and(write!(f, "{}", termion::style::NoUnderline).map(|_| me & !Self::UNDERLINE));
+impl fmt::Display for Style {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let mut result = Ok(());
+        if (*self == Self::NORMAL) {
+            result = result.and(write!(f, "{}", termion::style::Reset));
+        } else {
+            if (*self & Self::BOLD > Self::NORMAL) {
+                result = result.and(write!(f, "{}", termion::style::Bold));
+            }
+            if (*self & Self::ITALIC > Self::NORMAL) {
+                result = result.and(write!(f, "{}", termion::style::Italic));
+            }
+            if (*self & Self::UNDERLINE > Self::NORMAL) {
+                result = result.and(write!(f, "{}", termion::style::Underline));
+            }
         }
         result
     }

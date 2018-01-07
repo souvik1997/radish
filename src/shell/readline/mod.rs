@@ -240,9 +240,8 @@ impl TerminalBuffer {
 
     pub fn add_row(&mut self, row: &Row) -> Option<usize> {
         use std::fmt::Write;
-        let mut current_style = Style::NORMAL;
         let mut output = String::new();
-        write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
+        write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
         let mut cursor_position = None;
         let row_width = {
             if row.columns.len() == 1 {
@@ -285,17 +284,21 @@ impl TerminalBuffer {
                 write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
                 write!(&mut output, " ");
             }
-            current_style = self.render_displaystring(&col.left, current_style, &mut output);
+            self.render_displaystring(&col.left, &mut output);
+            write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
             for x in left_end..center_start {
-                write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
                 write!(&mut output, " ");
             }
-            current_style = self.render_displaystring(&col.center, current_style, &mut output);
+
+            self.render_displaystring(&col.center, &mut output);
+            write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
             for x in center_end..right_start {
                 write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
                 write!(&mut output, " ");
             }
-            current_style = self.render_displaystring(&col.right, current_style, &mut output);
+
+            self.render_displaystring(&col.right, &mut output);
+            write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
             for x in right_end..end {
                 write!(&mut output, " ");
             }
@@ -312,19 +315,15 @@ impl TerminalBuffer {
                 cursor_position = Some(right_start + right_pos)
             }
         }
-        current_style = Style::update(current_style, Style::NORMAL, &mut output).expect("failed to update style");
-        write!(output, "{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)));
+        write!(output, "{}{}", Color::new(color::Mode::Normal(color::Base::Reset), color::Mode::Normal(color::Base::Reset)), Style::NORMAL);
         self.buffer.push(output);
         cursor_position
     }
 
-    fn render_displaystring(&self, string: &DisplayString, mut style: Style, mut writer: &mut fmt::Write) -> Style {
+    fn render_displaystring(&self, string: &DisplayString, mut writer: &mut fmt::Write) {
         use std::fmt::Write;
         for component in &string.components {
-            write!(&mut writer, "{}", component.color);
-            style = Style::update(style, component.style, &mut writer).expect("failed to update style");
-            write!(&mut writer, "{}", component.text);
+            write!(&mut writer, "{}{}{}", component.color, component.style, component.text);
         };
-        style
     }
 }

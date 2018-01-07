@@ -78,13 +78,16 @@ impl<'a> Render for LineEditor<'a> {
             lines[0].columns[0].left.cursor = Some(cursor_position);
         }
         let mut total_prev_length = 0;
-        for word in buffer_string.split_word_bounds() {
+        for (index, word) in buffer_string.split_word_bounds().enumerate() {
             for word in sub_strings(word, width) {
                 let total_length = lines.last().unwrap().width();
                 let total_line_length = total_prev_length + total_length;
-                // TODO: handle case when single word is longer than width
-                let component = DisplayStringComponent::new(word, Color::new(color::Mode::Normal(color::Base::Green), color::Mode::Normal(color::Base::Red)), Style::NORMAL);
-
+                let component;
+                if index == 0 {
+                    component = DisplayStringComponent::new(word, Color::new(color::Mode::Normal(color::Base::White), color::Mode::Normal(color::Base::Reset)), Style::BOLD);
+                } else {
+                    component = DisplayStringComponent::new(word, Color::new(color::Mode::Normal(color::Base::Blue), color::Mode::Light(color::Base::Reset)), Style::NORMAL);
+                }
                 if total_length + component.width() >= width {
                     let component_cursor;
                     if cursor_position > total_line_length && total_line_length + component.width() >= cursor_position {
