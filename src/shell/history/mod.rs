@@ -23,29 +23,30 @@ impl History {
         match connection {
             Ok(con) => {
                 // Sqlite stores timestamp as text
-                diesel::sql_query("CREATE TABLE IF NOT EXISTS history (
+                diesel::sql_query(
+                    "CREATE TABLE IF NOT EXISTS history (
                                    timestamp text PRIMARY_KEY,
                                    command text
-                                  );").execute(&con).map_err(|e| {
-                                      use std::error::Error;
-                                      ConnectionError::BadConnection(e.description().to_owned())
-                                  })?;
+                                  );",
+                ).execute(&con)
+                    .map_err(|e| {
+                        use std::error::Error;
+                        ConnectionError::BadConnection(e.description().to_owned())
+                    })?;
                 let entries = History::load_entries(&con);
                 Ok(History {
                     connection: con,
                     entries: entries,
                 })
-            },
-            Err(e) => {
-                Err(e)
             }
+            Err(e) => Err(e),
         }
     }
 
     pub fn len(&self) -> usize {
         match self.entries {
             Some(ref s) => s.len(),
-            None => 0
+            None => 0,
         }
     }
 
@@ -61,14 +62,17 @@ impl History {
     }
 
     pub fn add_command(&mut self, cmd: &str) -> Result<(), ()> {
-        match diesel::insert_into(history::table).values(&NewHistoryEntry {
-            timestamp: chrono::offset::Utc::now().naive_utc(),
-            command: cmd,
-        }).execute(&self.connection) {
+        match diesel::insert_into(history::table)
+            .values(&NewHistoryEntry {
+                timestamp: chrono::offset::Utc::now().naive_utc(),
+                command: cmd,
+            })
+            .execute(&self.connection)
+        {
             Ok(_) => {
                 self.entries = History::load_entries(&self.connection);
                 Ok(())
-            },
+            }
             Err(e) => {
                 eprintln!("error: {:}", e);
                 Err(())

@@ -52,7 +52,7 @@ impl CursorPosition {
 }
 
 /// The core line editor. Displays and provides editing for history and the new buffer.
-pub struct Editor<'a> {
+pub struct Editor<'a, 'b: 'a> {
     // The location of the cursor. Note that the cursor does not lie on a char, but between chars.
     // So, if `cursor == 0` then the cursor is before the first char,
     // and if `cursor == 1` ten the cursor is after the first char and before the second char.
@@ -65,7 +65,6 @@ pub struct Editor<'a> {
     cur_history_loc: Option<usize>,
 
     // If this is true, on the next tab we print the completion list.
-    show_completions_hint: bool,
 
     // Show autosuggestions based on history
     show_autosuggestions: bool,
@@ -75,7 +74,7 @@ pub struct Editor<'a> {
     pub no_eol: bool,
 
     pub history: HistoryManager<'a>,
-    pub completer: Option<&'a Completer<'a>>,
+    pub completer: Option<&'a mut Completer<'b>>,
 }
 
 macro_rules! cur_buf_mut {
@@ -96,21 +95,16 @@ macro_rules! cur_buf {
     }
 }
 
-impl<'a> Editor<'a> {
-    pub fn new(history: Option<&'a History>, completer: Option<&'a Completer<'a>>) -> Self {
+impl<'a, 'b: 'a> Editor<'a, 'b> {
+    pub fn new(history: Option<&'a History>, completer: Option<&'a mut Completer<'b>>) -> Self {
         Editor::new_with_init_buffer(Buffer::new(), history, completer)
     }
 
-    pub fn new_with_init_buffer<B: Into<Buffer>>(
-        buffer: B,
-        history: Option<&'a History>,
-        completer: Option<&'a Completer<'a>>,
-    ) -> Self {
+    pub fn new_with_init_buffer<B: Into<Buffer>>(buffer: B, history: Option<&'a History>, completer: Option<&'a mut Completer<'b>>) -> Self {
         let mut ed = Editor {
             cursor: 0,
             new_buf: buffer.into(),
             cur_history_loc: None,
-            show_completions_hint: false,
             show_autosuggestions: true,
             no_eol: false,
             history: HistoryManager::new(history),
@@ -171,10 +165,6 @@ impl<'a> Editor<'a> {
         did
     }
 
-    pub fn skip_completions_hint(&mut self) {
-        self.show_completions_hint = false;
-    }
-
     pub fn complete(&mut self, handler: &mut EventHandler) -> ReadlineEvent {
         handler(Event::new(self, EventKind::BeforeComplete));
 
@@ -187,10 +177,8 @@ impl<'a> Editor<'a> {
                 None => "".into(),
             };
 
-            if let Some(ref completer) = self.completer {
+            if let Some(ref mut completer) = self.completer {
                 let mut completions = completer.completions(word.as_ref(), &buf.data);
-                completions.sort();
-                completions.dedup();
                 (word, completions)
             } else {
                 return ReadlineEvent::Continue;
@@ -199,43 +187,13 @@ impl<'a> Editor<'a> {
 
         if completions.len() == 0 {
             // Do nothing.
-            self.show_completions_hint = false;
             ReadlineEvent::Continue
         } else if completions.len() == 1 {
-            self.show_completions_hint = false;
             self.delete_word_before_cursor(false);
-            self.insert_str_after_cursor(completions[0].as_ref());
+            self.insert_str_after_cursor(completions.pick_one().unwrap().replacement.as_ref());
             ReadlineEvent::Continue
         } else {
-            /*
-            let common_prefix = util::find_longest_common_prefix(
-                &completions
-                    .iter()
-                    .map(|x| x.chars().collect())
-                    .collect::<Vec<Vec<char>>>()[..],
-            );
-
-            if let Some(p) = common_prefix {
-                let s = p.iter().cloned().collect::<String>();
-
-                if s.len() > word.len() && s.starts_with(&word[..]) {
-                    self.delete_word_before_cursor(false);
-                    return self.insert_str_after_cursor(s.as_ref());
-                }
-            }
-
-            if self.show_completions_hint {
-                try!(write!(self.out, "\r\n"));
-                try!(self.print_completion_list(&completions[..]));
-                try!(write!(self.out, "\r\n"));
-                try!(ReadlineEvent::Continue);
-
-                self.show_completions_hint = false;
-            } else {
-                self.show_completions_hint = true;
-            }
-            */
-            ReadlineEvent::StartCompletionPager
+            ReadlineEvent::StartCompletionPager(completions)
         }
     }
 
@@ -519,8 +477,8 @@ impl<'a> Editor<'a> {
     }
 }
 
-impl<'a> From<Editor<'a>> for String {
-    fn from(ed: Editor<'a>) -> String {
+impl<'a, 'b: 'a> From<Editor<'a, 'b>> for String {
+    fn from(ed: Editor<'a, 'b>) -> String {
         match ed.cur_history_loc {
             Some(i) => ed.history[i].clone(),
             _ => ed.new_buf,

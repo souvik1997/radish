@@ -12,13 +12,13 @@ use super::super::CursorPosition;
 /// let mut context = Context::new();
 /// context.key_bindings = KeyBindings::Emacs;
 /// ```
-pub struct Emacs<'a> {
-    ed: Editor<'a>,
+pub struct Emacs<'a, 'b: 'a> {
+    ed: Editor<'a, 'b>,
     last_arg_fetch_index: Option<usize>,
 }
 
-impl<'a> Emacs<'a> {
-    pub fn new(ed: Editor<'a>) -> Self {
+impl<'a, 'b: 'a> Emacs<'a, 'b> {
+    pub fn new(ed: Editor<'a, 'b>) -> Self {
         Emacs {
             ed,
             last_arg_fetch_index: None,
@@ -98,7 +98,7 @@ impl<'a> Emacs<'a> {
     }
 }
 
-impl<'a> KeyMap<'a, Emacs<'a>> for Emacs<'a> {
+impl<'a, 'b: 'a> KeyMap<'a, 'b, Emacs<'a, 'b>> for Emacs<'a, 'b> {
     fn handle_key_core(&mut self, key: Key) -> ReadlineEvent {
         match key {
             Key::Alt('.') => {}
@@ -122,17 +122,17 @@ impl<'a> KeyMap<'a, Emacs<'a>> for Emacs<'a> {
         }
     }
 
-    fn editor_mut(&mut self) -> &mut Editor<'a> {
+    fn editor_mut(&mut self) -> &mut Editor<'a, 'b> {
         &mut self.ed
     }
 
-    fn editor(&self) -> &Editor<'a> {
+    fn editor(&self) -> &Editor<'a, 'b> {
         &self.ed
     }
 }
 
-impl<'a> From<Emacs<'a>> for String {
-    fn from(emacs: Emacs<'a>) -> String {
+impl<'a, 'b: 'a> From<Emacs<'a, 'b>> for String {
+    fn from(emacs: Emacs<'a, 'b>) -> String {
         emacs.ed.into()
     }
 }
@@ -143,7 +143,7 @@ enum EmacsMoveDir {
     Right,
 }
 
-fn emacs_move_word(ed: &mut Editor, direction: EmacsMoveDir) -> ReadlineEvent {
+fn emacs_move_word<'a, 'b: 'a>(ed: &mut Editor<'a, 'b>, direction: EmacsMoveDir) -> ReadlineEvent {
     let (words, pos) = ed.get_words_and_cursor_position();
 
     let word_index = match pos {

@@ -115,30 +115,26 @@ where
                 }
                 if c == '\\' {
                     if last_base < i {
-                        new_string_components
-                            .push(StringLiteralComponent::Literal(&input[last_base..i]));
+                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
                     }
                     state = State::Escaped;
                 }
                 if c == '$' {
                     if last_base < i {
-                        new_string_components
-                            .push(StringLiteralComponent::Literal(&input[last_base..i]));
+                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
                     }
                     state = State::ExpectVarOpen;
                 }
                 if c == '~' {
                     if last_base < i {
-                        new_string_components
-                            .push(StringLiteralComponent::Literal(&input[last_base..i]));
+                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
                     }
                     new_string_components.push(StringLiteralComponent::EnvVar("HOME"));
                     state = State::HomeExpansion;
                 }
                 if c == '{' {
                     if last_base < i {
-                        new_string_components
-                            .push(StringLiteralComponent::Literal(&input[last_base..i]));
+                        new_string_components.push(StringLiteralComponent::Literal(&input[last_base..i]));
                     }
                     state = State::BraceOpen;
                 }

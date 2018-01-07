@@ -12,10 +12,14 @@ pub struct Row<'a> {
 
 impl<'a> UnicodeWidthStr for Row<'a> {
     fn width(&self) -> usize {
-        self.columns.iter().fold(0, |acc, s| acc + s.width())
+        self.columns.iter().fold(0, |acc, s| {
+            acc + s.width()
+        })
     }
     fn width_cjk(&self) -> usize {
-        self.columns.iter().fold(0, |acc, s| acc + s.width_cjk())
+        self.columns.iter().fold(0, |acc, s| {
+            acc + s.width_cjk()
+        })
     }
 }
 
@@ -51,16 +55,22 @@ impl<'a> DisplayString<'a> {
     }
 
     pub fn len(&self) -> usize {
-        self.components.iter().fold(0, |acc, s| acc + s.len())
+        self.components.iter().fold(0, |acc, s| {
+            acc + s.len()
+        })
     }
 }
 
 impl<'a> UnicodeWidthStr for DisplayString<'a> {
     fn width(&self) -> usize {
-        self.components.iter().fold(0, |acc, s| acc + s.width())
+        self.components.iter().fold(0, |acc, s| {
+            acc + s.width()
+        })
     }
     fn width_cjk(&self) -> usize {
-        self.components.iter().fold(0, |acc, s| acc + s.width_cjk())
+        self.components.iter().fold(0, |acc, s| {
+            acc + s.width_cjk()
+        })
     }
 }
 

@@ -23,16 +23,14 @@ impl<'a> HistoryManager<'a> {
             Some(h) => {
                 let mut buffers = VecDeque::with_capacity(h.len());
                 match h.entries() {
-                    &Some(ref entries) => {
-                        for entry in entries {
-                            buffers.push_back(Buffer::from(entry.command.as_ref()))
-                        }
+                    &Some(ref entries) => for entry in entries {
+                        buffers.push_back(Buffer::from(entry.command.as_ref()))
                     },
                     &None => {}
                 };
                 buffers
-            },
-            None => VecDeque::with_capacity(0)
+            }
+            None => VecDeque::with_capacity(0),
         };
         HistoryManager {
             buffers: buffers,
@@ -47,11 +45,7 @@ impl<'a> HistoryManager<'a> {
 
     /// Go through the history and try to find a buffer which starts the same as the new buffer
     /// given to this function as argument.
-    pub fn get_newest_match<'b>(
-        &'a self,
-        curr_position: Option<usize>,
-        new_buff: &'b Buffer,
-    ) -> Option<&'a Buffer> {
+    pub fn get_newest_match<'b>(&'a self, curr_position: Option<usize>, new_buff: &'b Buffer) -> Option<&'a Buffer> {
         let pos = curr_position.unwrap_or(self.buffers.len());
         for iter in (0..pos).rev() {
             if let Some(tested) = {

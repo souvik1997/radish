@@ -1,7 +1,8 @@
 use super::syntax::ast::Expr;
 use std::env;
 extern crate users;
-pub mod jobs;
+mod job;
+pub use self::job::Job;
 use std::cell::Cell;
 use std::path::PathBuf;
 use std::ops::DerefMut;
@@ -11,30 +12,26 @@ use std::sync::RwLock;
 use std::sync::Arc;
 use std::thread;
 use nix;
-extern crate rlua;
-use self::rlua::Lua;
 
-pub struct ShellState {
-    background_jobs: Arc<RwLock<Vec<jobs::Job>>>,
-    foreground_jobs: Arc<RwLock<Vec<jobs::Job>>>,
-    stopped_jobs: Arc<RwLock<Vec<jobs::Job>>>,
+pub struct JobManager {
+    background_jobs: Arc<RwLock<Vec<Job>>>,
+    foreground_jobs: Arc<RwLock<Vec<Job>>>,
+    stopped_jobs: Arc<RwLock<Vec<Job>>>,
     current_job_pid: RwLock<Cell<Option<nix::unistd::Pid>>>,
-    lua: RwLock<Lua>,
 }
 
-impl ShellState {
+impl JobManager {
     pub fn new() -> Self {
-        ShellState {
-            background_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
-            foreground_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
-            stopped_jobs: Arc::new(RwLock::new(Vec::<jobs::Job>::new())),
+        JobManager {
+            background_jobs: Arc::new(RwLock::new(Vec::<Job>::new())),
+            foreground_jobs: Arc::new(RwLock::new(Vec::<Job>::new())),
+            stopped_jobs: Arc::new(RwLock::new(Vec::<Job>::new())),
             current_job_pid: RwLock::new(Cell::new(None)),
-            lua: RwLock::new(Lua::new()),
         }
     }
 
-    pub fn enqueue_job(&mut self, expr: &Expr) -> Result<(), jobs::Error> {
-        match jobs::Job::from_expr(&expr, self) {
+    pub fn enqueue_job_from_expr(&mut self, expr: &Expr) -> Result<(), job::Error> {
+        match Job::from_expr(&expr, self) {
             Ok(mut job) => {
                 if job.background {
                     match job.run(self) {
@@ -55,7 +52,7 @@ impl ShellState {
         }
     }
 
-    pub fn start_background_reaper(&self) -> thread::JoinHandle<()> {
+    pub fn start_background_reaper(&mut self) -> thread::JoinHandle<()> {
         let background_jobs = self.background_jobs.clone();
         let stopped_jobs = self.stopped_jobs.clone();
         thread::spawn(move || loop {
@@ -64,12 +61,12 @@ impl ShellState {
         })
     }
 
-    pub fn run_foreground_jobs(&mut self) -> Result<(), jobs::Error> {
+    pub fn run_foreground_jobs(&mut self) -> Result<(), job::Error> {
         while let Some(mut job) = get_next_job(&self.foreground_jobs) {
             self.current_job_pid.write().unwrap().set(None);
             loop {
                 match job.get_status() {
-                    jobs::Status::NotStarted => match job.run(self) {
+                    job::Status::NotStarted => match job.run(self) {
                         Ok(_) => {
                             assert!(job.in_foreground());
                         }
@@ -77,36 +74,32 @@ impl ShellState {
                             return Err(e);
                         }
                     },
-                    jobs::Status::Started(pid, _, status) => {
+                    job::Status::Started(pid, _, status) => {
                         self.current_job_pid.write().unwrap().set(Some(pid));
                         if !job.in_foreground() {
                             job.set_foreground();
                         }
                         match status {
-                            nix::sys::wait::WaitStatus::StillAlive
-                            | nix::sys::wait::WaitStatus::Continued(_) => {
-                                match job.wait(Some(nix::sys::wait::WUNTRACED)) {
-                                    Ok(nix::sys::wait::WaitStatus::Stopped(_, _)) => {
-                                        self.stopped_jobs.write().unwrap().push(job);
-                                        break;
-                                    }
-                                    Ok(nix::sys::wait::WaitStatus::Exited(_, _))
-                                    | Ok(nix::sys::wait::WaitStatus::Signaled(_, _, _)) => {
-                                        break;
-                                    }
-                                    Ok(nix::sys::wait::WaitStatus::StillAlive) => {
-                                        panic!("job should not be still running since waitpid was not called with WNOHANG");
-                                    }
-                                    Ok(nix::sys::wait::WaitStatus::Continued(_)) => {
-                                        panic!("job should not be continued since waitpid was not called with WCONTINUED");
-                                    }
-                                    #[cfg(not(target_os = "macos"))]
-                                    Ok(nix::sys::wait::WaitStatus::PtraceEvent(_, _, _)) => {}
-                                    Err(_) => {
-                                        return Err(jobs::Error::Wait);
-                                    }
+                            nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Continued(_) => match job.wait(Some(nix::sys::wait::WUNTRACED)) {
+                                Ok(nix::sys::wait::WaitStatus::Stopped(_, _)) => {
+                                    self.stopped_jobs.write().unwrap().push(job);
+                                    break;
                                 }
-                            }
+                                Ok(nix::sys::wait::WaitStatus::Exited(_, _)) | Ok(nix::sys::wait::WaitStatus::Signaled(_, _, _)) => {
+                                    break;
+                                }
+                                Ok(nix::sys::wait::WaitStatus::StillAlive) => {
+                                    panic!("job should not be still running since waitpid was not called with WNOHANG");
+                                }
+                                Ok(nix::sys::wait::WaitStatus::Continued(_)) => {
+                                    panic!("job should not be continued since waitpid was not called with WCONTINUED");
+                                }
+                                #[cfg(not(target_os = "macos"))]
+                                Ok(nix::sys::wait::WaitStatus::PtraceEvent(_, _, _)) => {}
+                                Err(_) => {
+                                    return Err(job::Error::Wait);
+                                }
+                            },
                             nix::sys::wait::WaitStatus::Exited(_, _) => {
                                 break;
                             }
@@ -130,7 +123,7 @@ impl ShellState {
     }
 }
 
-impl jobs::BuiltinHandler for ShellState {
+impl job::BuiltinHandler for JobManager {
     fn handle_builtin(&mut self, name: &str, args: &[String]) -> i8 {
         match name {
             "cd" => {
@@ -181,10 +174,10 @@ impl jobs::BuiltinHandler for ShellState {
                 0
             }
             "fg" | "bg" => {
-                fn find_job_by_pid(jobs: &[jobs::Job], pid: nix::unistd::Pid) -> Option<usize> {
+                fn find_job_by_pid(jobs: &[Job], pid: nix::unistd::Pid) -> Option<usize> {
                     for (index, job) in jobs.iter().enumerate() {
                         match job.get_status() {
-                            jobs::Status::Started(job_pid, _, _) => {
+                            job::Status::Started(job_pid, _, _) => {
                                 if job_pid == pid {
                                     return Some(index);
                                 }
@@ -195,11 +188,11 @@ impl jobs::BuiltinHandler for ShellState {
                     None
                 }
 
-                fn max_job_pid(jobs: &[jobs::Job]) -> Option<nix::unistd::Pid> {
+                fn max_job_pid(jobs: &[Job]) -> Option<nix::unistd::Pid> {
                     let mut max_pid = None;
                     for job in jobs {
                         match job.get_status() {
-                            jobs::Status::Started(job_pid, _, _) => {
+                            job::Status::Started(job_pid, _, _) => {
                                 if max_pid.is_none() {
                                     max_pid = Some(job_pid);
                                 } else {
@@ -224,7 +217,7 @@ impl jobs::BuiltinHandler for ShellState {
                             } else {
                                 None
                             }
-                        },
+                        }
                         None => {
                             if name == "bg" {
                                 max_job_pid(&stopped_jobs)
@@ -247,7 +240,7 @@ impl jobs::BuiltinHandler for ShellState {
                     }
                 };
                 if let Some(pid) = pid {
-                    let mut job: jobs::Job;
+                    let mut job: Job;
                     match find_job_by_pid(&stopped_jobs, pid) {
                         Some(stopped_jobs_index) => {
                             job = stopped_jobs.remove(stopped_jobs_index);
@@ -294,7 +287,7 @@ impl jobs::BuiltinHandler for ShellState {
     }
 }
 
-fn get_next_job(queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
+fn get_next_job(queue: &RwLock<Vec<Job>>) -> Option<Job> {
     let mut foreground_jobs = queue.write().unwrap();
     if foreground_jobs.len() > 0 {
         let job = foreground_jobs.remove(0);
@@ -304,22 +297,18 @@ fn get_next_job(queue: &RwLock<Vec<jobs::Job>>) -> Option<jobs::Job> {
     }
 }
 
-fn background_reaper(
-    background_jobs: Arc<RwLock<Vec<jobs::Job>>>,
-    stopped_jobs: Arc<RwLock<Vec<jobs::Job>>>,
-) {
+fn background_reaper(background_jobs: Arc<RwLock<Vec<Job>>>, stopped_jobs: Arc<RwLock<Vec<Job>>>) {
     let mut bg_jobs = background_jobs.write().unwrap();
     let mut st_jobs = stopped_jobs.write().unwrap();
     let mut new_bg_jobs = Vec::new();
     while let Some(mut job) = bg_jobs.pop() {
         match job.get_status() {
-            jobs::Status::NotStarted => {
+            job::Status::NotStarted => {
                 panic!("found job in bg queue that has not been started");
             }
-            jobs::Status::Started(_, _, status) => {
+            job::Status::Started(_, _, status) => {
                 match status {
-                    nix::sys::wait::WaitStatus::StillAlive
-                    | nix::sys::wait::WaitStatus::Continued(_) => {
+                    nix::sys::wait::WaitStatus::StillAlive | nix::sys::wait::WaitStatus::Continued(_) => {
                         match job.wait(Some(nix::sys::wait::WUNTRACED | nix::sys::wait::WNOHANG)) {
                             Ok(_) => {
                                 new_bg_jobs.push(job);

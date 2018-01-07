@@ -3,10 +3,10 @@ use shell::readline::ReadlineEvent;
 use super::Editor;
 use super::event::*;
 
-pub trait KeyMap<'a, T>: From<T> {
+pub trait KeyMap<'a, 'b: 'a, T>: From<T> {
     fn handle_key_core(&mut self, key: Key) -> ReadlineEvent;
-    fn editor(&self) -> &Editor<'a>;
-    fn editor_mut(&mut self) -> &mut Editor<'a>;
+    fn editor(&self) -> &Editor<'a, 'b>;
+    fn editor_mut(&mut self) -> &mut Editor<'a, 'b>;
 
     fn handle_key(&mut self, mut key: Key, handler: &mut EventHandler) -> ReadlineEvent {
         handler(Event::new(self.editor_mut(), EventKind::BeforeKey(key)));
@@ -30,18 +30,10 @@ pub trait KeyMap<'a, T>: From<T> {
             Key::Char('\n') => {
                 return ReadlineEvent::Done;
             }
-            Key::Ctrl('f') if self.editor().is_currently_showing_autosuggestion() => {
-                self.editor_mut().accept_autosuggestion()
-            }
-            Key::Right
-                if self.editor().is_currently_showing_autosuggestion()
-                    && self.editor().cursor_is_at_end_of_line() =>
-            {
-                self.editor_mut().accept_autosuggestion()
-            }
+            Key::Ctrl('f') if self.editor().is_currently_showing_autosuggestion() => self.editor_mut().accept_autosuggestion(),
+            Key::Right if self.editor().is_currently_showing_autosuggestion() && self.editor().cursor_is_at_end_of_line() => self.editor_mut().accept_autosuggestion(),
             _ => {
                 let res = self.handle_key_core(key);
-                self.editor_mut().skip_completions_hint();
                 res
             }
         };

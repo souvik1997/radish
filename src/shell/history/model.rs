@@ -8,10 +8,9 @@ pub struct Entry {
     pub command: String,
 }
 
-
 #[derive(Insertable)]
 #[table_name = "history"]
 pub struct NewHistoryEntry<'a> {
     pub timestamp: NaiveDateTime,
-    pub command: &'a str
+    pub command: &'a str,
 }

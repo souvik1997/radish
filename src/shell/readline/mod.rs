@@ -10,7 +10,7 @@ use std::io::{self, stdin, stdout, Write};
 use std::fmt;
 use std::cmp::max;
 use super::history::History;
-use super::completion::Completer;
+use super::completion::{Completer, Completions};
 use self::termion::input::TermRead;
 use self::termion::raw::IntoRawMode;
 
@@ -23,7 +23,7 @@ pub enum ReadlineEvent {
     Interrupted,
     HistorySearch,
     Continue,
-    StartCompletionPager,
+    StartCompletionPager(Completions),
 }
 
 impl Readline {
@@ -31,7 +31,7 @@ impl Readline {
         Readline {}
     }
 
-    pub fn read(&mut self, completer: &Completer, history: &History) -> Option<String> {
+    pub fn read<'a, 'b: 'a>(&mut self, completer: &'a mut Completer<'b>, history: &'a History) -> Option<String> {
         let result;
         loop {
             let res = self.read_impl(completer, history);
@@ -56,23 +56,14 @@ impl Readline {
         result
     }
 
-    fn render(
-        &self,
-        editor: &mut Editor,
-        cursor: &mut CursorManager,
-        term_buffer: &mut TerminalBuffer,
-        terminal_width: usize,
-        mut stdout: &mut Write,
-    ) {
+    fn render(&self, editor: &mut Editor, cursor: &mut CursorManager, term_buffer: &mut TerminalBuffer, terminal_width: usize, mut stdout: &mut Write) {
         term_buffer.set_width(terminal_width);
         let new_position = {
             let mut index = 0;
             let mut cursor_position: Option<(u16, u16)> = None;
             editor.render(
                 &mut |ref row| {
-                    if let Some(row_cursor_position) =
-                        term_buffer.add_row(row).expect("failed to write to stdout")
-                    {
+                    if let Some(row_cursor_position) = term_buffer.add_row(row).expect("failed to write to stdout") {
                         assert!(cursor_position.is_none());
                         cursor_position = Some((row_cursor_position as u16, index as u16))
                     }
@@ -97,17 +88,12 @@ impl Readline {
         stdout.flush().expect("failed to flush stdout");
     }
 
-    fn read_impl(
-        &mut self,
-        completer: &Completer,
-        history: &History,
-    ) -> Result<String, ReadlineEvent> {
+    fn read_impl<'a, 'b: 'a>(&mut self, completer: &'a mut Completer<'b>, history: &'a History) -> Result<String, ReadlineEvent> {
         let mut editor = Editor::new(completer, history);
         let mut term_buffer = TerminalBuffer::new();
         let mut stdout = stdout().into_raw_mode().expect("failed to set raw mode");
         let mut cursor = CursorManager::new();
-        let (mut terminal_width, mut terminal_height) =
-            termion::terminal_size().expect("failed to get terminal size");
+        let (mut terminal_width, mut terminal_height) = termion::terminal_size().expect("failed to get terminal size");
         let mut result = Err(ReadlineEvent::Interrupted);
         let stdin = stdin();
         self.render(
@@ -131,8 +117,7 @@ impl Readline {
                         break;
                     }
                 }
-                let (new_terminal_width, new_terminal_height) =
-                    termion::terminal_size().expect("failed to get terminal size");
+                let (new_terminal_width, new_terminal_height) = termion::terminal_size().expect("failed to get terminal size");
                 if new_terminal_width != terminal_width || new_terminal_height != terminal_height {
                     terminal_width = new_terminal_width;
                     terminal_height = new_terminal_height;
@@ -313,10 +298,7 @@ impl TerminalBuffer {
             assert!(center_start >= left_end);
             assert!(right_start >= center_end);
             assert!(end >= right_end);
-            assert!(
-                (left_start - begin) + (center_start - left_end) + (right_start - center_end)
-                    + (end - right_end) + col.width() == column_width
-            );
+            assert!((left_start - begin) + (center_start - left_end) + (right_start - center_end) + (end - right_end) + col.width() == column_width);
             for _ in begin..left_start {
                 write!(
                     output,
@@ -403,11 +385,7 @@ impl TerminalBuffer {
         Ok(cursor_position)
     }
 
-    fn render_displaystring(
-        &self,
-        string: &DisplayString,
-        mut writer: &mut fmt::Write,
-    ) -> fmt::Result {
+    fn render_displaystring(&self, string: &DisplayString, mut writer: &mut fmt::Write) -> fmt::Result {
         use std::fmt::Write;
         for component in &string.components {
             write!(
