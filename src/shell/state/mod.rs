@@ -18,7 +18,7 @@ pub struct ShellState {
     background_jobs: Arc<RwLock<Vec<jobs::Job>>>,
     foreground_jobs: Arc<RwLock<Vec<jobs::Job>>>,
     stopped_jobs: Arc<RwLock<Vec<jobs::Job>>>,
-    current_job_pid: RwLock<Cell<Option<nix::libc::pid_t>>>,
+    current_job_pid: RwLock<Cell<Option<nix::unistd::Pid>>>,
     lua: RwLock<Lua>,
 }
 
@@ -181,7 +181,7 @@ impl jobs::BuiltinHandler for ShellState {
                 0
             }
             "fg" | "bg" => {
-                fn find_job_by_pid(jobs: &[jobs::Job], pid: nix::libc::pid_t) -> Option<usize> {
+                fn find_job_by_pid(jobs: &[jobs::Job], pid: nix::unistd::Pid) -> Option<usize> {
                     for (index, job) in jobs.iter().enumerate() {
                         match job.get_status() {
                             jobs::Status::Started(job_pid, _, _) => {
@@ -195,7 +195,7 @@ impl jobs::BuiltinHandler for ShellState {
                     None
                 }
 
-                fn max_job_pid(jobs: &[jobs::Job]) -> Option<nix::libc::pid_t> {
+                fn max_job_pid(jobs: &[jobs::Job]) -> Option<nix::unistd::Pid> {
                     let mut max_pid = None;
                     for job in jobs {
                         match job.get_status() {
@@ -203,7 +203,7 @@ impl jobs::BuiltinHandler for ShellState {
                                 if max_pid.is_none() {
                                     max_pid = Some(job_pid);
                                 } else {
-                                    if job_pid > max_pid.unwrap() {
+                                    if nix::libc::pid_t::from(job_pid) > nix::libc::pid_t::from(max_pid.unwrap()) {
                                         max_pid = Some(job_pid);
                                     }
                                 }
@@ -215,9 +215,16 @@ impl jobs::BuiltinHandler for ShellState {
                 }
                 let mut bg_jobs = self.background_jobs.write().unwrap();
                 let mut stopped_jobs = self.stopped_jobs.write().unwrap();
-                let pid: Option<nix::libc::pid_t> = {
+                let pid: Option<nix::unistd::Pid> = {
                     match args.first() {
-                        Some(pid_str) => pid_str.parse().ok(),
+                        Some(pid_str) => {
+                            let parsed = pid_str.parse();
+                            if parsed.is_ok() {
+                                Some(nix::unistd::Pid::from_raw(parsed.unwrap()))
+                            } else {
+                                None
+                            }
+                        },
                         None => {
                             if name == "bg" {
                                 max_job_pid(&stopped_jobs)
@@ -225,7 +232,7 @@ impl jobs::BuiltinHandler for ShellState {
                                 match max_job_pid(&bg_jobs) {
                                     Some(max_bg_pid) => match max_job_pid(&stopped_jobs) {
                                         Some(max_stopped_pid) => {
-                                            if max_stopped_pid > max_bg_pid {
+                                            if nix::libc::pid_t::from(max_stopped_pid) > nix::libc::pid_t::from(max_bg_pid) {
                                                 Some(max_stopped_pid)
                                             } else {
                                                 Some(max_bg_pid)

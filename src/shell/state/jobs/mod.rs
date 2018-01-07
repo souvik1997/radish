@@ -36,8 +36,8 @@ pub enum Configuration {
 pub enum Status {
     NotStarted,
     Started(
-        nix::libc::pid_t, /* pid */
-        nix::libc::pid_t, /* pgid */
+        nix::unistd::Pid, /* pid */
+        nix::unistd::Pid, /* pgid */
         nix::sys::wait::WaitStatus,
     ),
 }
@@ -277,7 +277,7 @@ impl Job {
                             }
                         }
                         Configuration::Command(_, _, _) => {
-                            let result = nix::sys::signal::kill(-pgid, nix::sys::signal::SIGCONT);
+                            let result = nix::sys::signal::kill(nix::unistd::Pid::from_raw(-nix::libc::pid_t::from(pgid)), nix::sys::signal::SIGCONT);
                             match result {
                                 Ok(_) => Ok(Status::Started(
                                     pid,
@@ -301,7 +301,7 @@ impl Job {
         }
     }
 
-    fn set_term_group(&self, pgid: nix::libc::pid_t) {
+    fn set_term_group(&self, pgid: nix::unistd::Pid) {
         let block_sigaction = nix::sys::signal::SigAction::new(
             nix::sys::signal::SigHandler::SigIgn,
             nix::sys::signal::SaFlags::empty(),
@@ -451,7 +451,7 @@ impl Job {
         output_fd: Option<RawFd>,
         handler: &mut B,
         post_fork_close: &[RawFd],
-        pgid: Option<nix::libc::pid_t>,
+        pgid: Option<nix::unistd::Pid>,
     ) -> Result<Status, Error> {
         match self.get_status() {
             Status::NotStarted => {}
@@ -633,13 +633,13 @@ impl Job {
                                         });
                                         if success {
                                             if let Some(child_pgid) = pgid {
-                                                nix::unistd::setpgid(0 /* self */, child_pgid)
+                                                nix::unistd::setpgid(nix::unistd::Pid::this(), child_pgid)
                                                     .expect(
                                                         "failed to setpgid to child pgid in child",
                                                     );
                                             } else {
                                                 let child_pid = nix::unistd::getpid();
-                                                nix::unistd::setpgid(0 /* self */, child_pid)
+                                                nix::unistd::setpgid(nix::unistd::Pid::this(), child_pid)
                                                     .expect(
                                                         "failed to setpgid to child pid in child",
                                                     );

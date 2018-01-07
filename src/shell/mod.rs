@@ -16,11 +16,11 @@ pub struct Shell {
 }
 
 struct TerminalFgGroupManager {
-    stdin_group: nix::libc::pid_t,
+    stdin_group: nix::unistd::Pid,
 }
 
 impl TerminalFgGroupManager {
-    pub fn new(group: nix::libc::pid_t) -> Option<TerminalFgGroupManager> {
+    pub fn new(group: nix::unistd::Pid) -> Option<TerminalFgGroupManager> {
         match nix::unistd::tcgetpgrp(stdin().as_raw_fd()) {
             Ok(stdin_group) => {
                 let t = TerminalFgGroupManager {
@@ -42,15 +42,15 @@ impl Drop for TerminalFgGroupManager {
 }
 
 struct ProcessGroupManager {
-    group: nix::libc::pid_t,
+    group: nix::unistd::Pid,
 }
 
 impl ProcessGroupManager {
-    pub fn new(group: nix::libc::pid_t) -> Option<ProcessGroupManager> {
+    pub fn new(group: nix::unistd::Pid) -> Option<ProcessGroupManager> {
         match nix::unistd::getpgid(None) {
             Ok(pgid) => {
                 let t = ProcessGroupManager { group: pgid };
-                match nix::unistd::setpgid(0 /* self */, group) {
+                match nix::unistd::setpgid(nix::unistd::Pid::this(), group) {
                     Ok(_) => Some(t),
                     Err(_) => None,
                 }
@@ -62,7 +62,7 @@ impl ProcessGroupManager {
 
 impl Drop for ProcessGroupManager {
     fn drop(&mut self) {
-        nix::unistd::setpgid(0, self.group).expect("failed to restore process group");
+        nix::unistd::setpgid(nix::unistd::Pid::this(), self.group).expect("failed to restore process group");
     }
 }
 
