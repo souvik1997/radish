@@ -5,11 +5,11 @@ extern crate nom;
 
 #[macro_use]
 extern crate bitflags;
-
 extern crate nix;
-
 extern crate unicode_normalization;
 extern crate unicode_segmentation;
+#[macro_use]
+extern crate diesel;
 
 mod shell;
 

@@ -19,8 +19,23 @@ pub struct HistoryManager<'a> {
 impl<'a> HistoryManager<'a> {
     /// Create new History structure.
     pub fn new(history_instance: Option<&'a History>) -> HistoryManager {
+        let buffers = match history_instance {
+            Some(h) => {
+                let mut buffers = VecDeque::with_capacity(h.len());
+                match h.entries() {
+                    &Some(ref entries) => {
+                        for entry in entries {
+                            buffers.push_back(Buffer::from(entry.command.as_ref()))
+                        }
+                    },
+                    &None => {}
+                };
+                buffers
+            },
+            None => VecDeque::with_capacity(0)
+        };
         HistoryManager {
-            buffers: VecDeque::with_capacity(DEFAULT_MAX_SIZE),
+            buffers: buffers,
             history_instance: history_instance,
         }
     }
@@ -39,26 +54,19 @@ impl<'a> HistoryManager<'a> {
     ) -> Option<&'a Buffer> {
         let pos = curr_position.unwrap_or(self.buffers.len());
         for iter in (0..pos).rev() {
-            if let Some(tested) = self.buffers.get(iter) {
+            if let Some(tested) = {
+                if iter > self.len() {
+                    None
+                } else {
+                    Some(self.index(iter))
+                }
+            } {
                 if tested.starts_with(new_buff) {
-                    return self.buffers.get(iter);
+                    return Some(tested);
                 }
             }
         }
         None
-    }
-
-    fn buffers_ref(&self) -> &VecDeque<Buffer> {
-        &self.buffers
-    }
-}
-
-impl<'a, 'b: 'a> IntoIterator for &'a HistoryManager<'b> {
-    type Item = &'a Buffer;
-    type IntoIter = vec_deque::Iter<'a, Buffer>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.buffers_ref().into_iter()
     }
 }
 

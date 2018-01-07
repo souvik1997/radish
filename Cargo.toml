@@ -14,3 +14,5 @@ glob = "^0.2.11"
 termion = "^1.5.1"
 bitflags = "^1.0.1"
 unicode-normalization = "0.1.5"
+diesel = { version = "1.0.0", features = ["sqlite", "chrono"] }
+chrono = "^0.4.0"
