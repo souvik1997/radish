@@ -16,3 +16,4 @@ bitflags = "^1.0.1"
 unicode-normalization = "0.1.5"
 diesel = { version = "1.0.0", features = ["sqlite", "chrono"] }
 chrono = "^0.4.0"
+libsqlite3-sys = { version = ">=0.8.0, <0.10.0", features = ["min_sqlite_version_3_7_16", "bundled"] }
