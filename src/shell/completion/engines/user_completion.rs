@@ -1,5 +1,6 @@
 use super::super::super::Lua;
 use super::Engine;
+use std::borrow::Cow;
 
 pub struct UserCompletion<'a> {
     lua: &'a Lua,
@@ -13,10 +14,10 @@ impl<'a> UserCompletion<'a> {
 }
 
 impl<'a> Engine for UserCompletion<'a> {
-    fn completions(&mut self, start: &str, line: &str) -> Option<Vec<(String, String)>> {
+    fn completions<'b>(&'b mut self, start: &str, line: &str) -> Option<Vec<(Cow<'b, str>, Cow<'b, str>)>> {
         // TODO
         Some(vec![
-            (String::from("test_file"), String::from("test description")),
+            (Cow::Borrowed("test_file"), Cow::Borrowed("test description")),
         ])
     }
 

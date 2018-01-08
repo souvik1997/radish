@@ -16,6 +16,7 @@ use self::termion::raw::IntoRawMode;
 
 pub struct Readline {}
 
+#[derive(Debug)]
 pub enum ReadlineEvent {
     ClearScreen,
     Done,
@@ -47,8 +48,8 @@ impl Readline {
                         return None;
                     }
                     ReadlineEvent::Interrupted => {}
-                    _ => {
-                        panic!("unexpected event");
+                    other => {
+                        panic!("unexpected event: {:?}", other);
                     }
                 },
             }

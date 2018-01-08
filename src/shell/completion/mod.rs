@@ -7,6 +7,7 @@ pub mod engines;
 use self::engines::Engine;
 use super::history::History;
 
+#[derive(Debug)]
 pub struct Completion {
     rank: usize,
     pub replacement: String,
@@ -33,6 +34,7 @@ impl cmp::PartialEq for Completion {
 
 impl cmp::Eq for Completion {}
 
+#[derive(Debug)]
 pub struct Completions {
     sets: HashMap<String, BTreeSet<Completion>>,
     start: String,
@@ -71,15 +73,15 @@ impl<'a> Completer<'a> {
         let mut sets = HashMap::new();
         for engine in &mut self.engines {
             use std::ops::DerefMut;
+            let category = engine.category().to_owned();
             match engine.deref_mut().completions(start, &line_string) {
                 Some(ref completions) => {
                     let mut set = BTreeSet::new();
-                    let category = engine.category();
                     for (index, compl) in completions.iter().enumerate() {
                         set.insert(Completion {
                             rank: index,
-                            replacement: compl.0.to_owned(),
-                            description: compl.1.to_owned(),
+                            replacement: compl.0.to_owned().into_owned(),
+                            description: compl.1.to_owned().into_owned(),
                         });
                     }
                     sets.insert(category.to_owned(), set);
