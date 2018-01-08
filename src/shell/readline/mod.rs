@@ -2,6 +2,7 @@ extern crate nix;
 extern crate termion;
 mod editor;
 use self::editor::Editor;
+//mod pager;
 mod display;
 use self::display::*;
 use self::unicode_width::UnicodeWidthStr;

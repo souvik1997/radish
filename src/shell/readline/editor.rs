@@ -1,6 +1,7 @@
 use super::display::*;
 use super::termion;
 use super::line_editor::LineEditor;
+//use super::pager::{Pager, PagerResult};
 use super::ReadlineEvent;
 use super::super::history::History;
 use super::super::completion::Completer;

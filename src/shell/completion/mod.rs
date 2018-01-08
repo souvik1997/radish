@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 pub mod engines;
+mod fuzzy;
+use self::fuzzy::fuzzy_search;
 
 use self::engines::Engine;
 use super::history::History;
@@ -36,28 +38,64 @@ impl cmp::Eq for Completion {}
 
 #[derive(Debug)]
 pub struct Completions {
-    sets: HashMap<String, BTreeSet<Completion>>,
-    start: String,
-    line: String,
+    pub sets: HashMap<String, CompletionSet>,
+    pub start: String,
+    pub line: String,
+}
+
+#[derive(Debug)]
+pub struct CompletionSet {
+    original_set: BTreeSet<Completion>,
+    current_set: Option<BTreeSet<Completion>>,
+}
+
+impl CompletionSet {
+    pub fn new(set: BTreeSet<Completion>) -> CompletionSet {
+        CompletionSet {
+            original_set: set,
+            current_set: None,
+        }
+    }
+
+    pub fn current(&self) -> &BTreeSet<Completion> {
+        match self.current_set {
+            None => &self.original_set,
+            Some(ref s) => s
+        }
+    }
+
+    pub fn filtered(&self) -> bool {
+        self.current_set.is_some()
+    }
+
+    pub fn update(&mut self, search_term: &str) {
+        self.current_set = Some(fuzzy_search(&self.original_set, search_term));
+    }
+
+    pub fn clear(&mut self) {
+        self.current_set = None;
+    }
 }
 
 impl Completions {
+
     pub fn len(&self) -> usize {
         let mut total = 0;
         for (_, ref v) in &self.sets {
-            total += v.len();
+            total += v.original_set.len();
         }
         total
     }
 
     pub fn pick_one<'a>(&'a self) -> Option<&'a Completion> {
         for (_, ref v) in &self.sets {
-            for c in v.iter() {
+            for c in v.original_set.iter() {
                 return Some(c);
             }
         }
         None
     }
+
 }
 
 pub struct Completer<'a> {
@@ -84,7 +122,7 @@ impl<'a> Completer<'a> {
                             description: compl.1.to_owned().into_owned(),
                         });
                     }
-                    sets.insert(category.to_owned(), set);
+                    sets.insert(category.to_owned(), CompletionSet::new(set));
                 }
                 None => {}
             }

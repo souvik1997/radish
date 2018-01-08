@@ -97,7 +97,6 @@ fn filename_complete(path: &str,
         Some(idx) => path.split_at(idx + sep.len_utf8()),
         None => ("", path),
     };
-
     let dir_path = Path::new(dir_name);
     let dir = if dir_path.starts_with("~") {
         // ~[/...]
@@ -125,7 +124,7 @@ fn filename_complete(path: &str,
         for entry in read_dir {
             if let Ok(entry) = entry {
                 if let Some(s) = entry.file_name().to_str() {
-                    if s.starts_with(file_name) {
+                    if s.starts_with(file_name) || file_name.is_empty() {
                         let mut path = String::from(dir_name) + s;
                         let metadata = fs::symlink_metadata(entry.path());
                         if let Ok(metadata) = metadata {
